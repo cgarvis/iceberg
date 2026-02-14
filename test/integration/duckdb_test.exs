@@ -24,7 +24,7 @@ defmodule Iceberg.Integration.DuckDBTest do
   end
 
   test "DuckDB can read an Iceberg table created by this library", %{tmpdir: tmpdir} do
-    table_name = "test_table"
+    table_name = "test_table_#{System.unique_integer([:positive])}"
     data_dir = Path.join([tmpdir, table_name, "data"])
     File.mkdir_p!(data_dir)
     parquet_file = Path.join(data_dir, "data-001.parquet")
