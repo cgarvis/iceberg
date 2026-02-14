@@ -166,6 +166,99 @@ defmodule Iceberg.Metadata do
   end
 
   @doc """
+  Evolves a table's schema by applying a schema evolution operation.
+
+  Creates a new schema version and updates metadata:
+  - Adds new schema to schemas array
+  - Updates current-schema-id
+  - Updates last-column-id
+  - Updates name mapping
+  - Preserves old schemas for historical field ID tracking
+
+  ## Parameters
+    - table_path: Relative path to table
+    - evolution_fn: Function that takes (current_schema, context) and returns evolved schema
+      Context contains:
+        - `:next_field_id` - Next field ID to use (from metadata's last-column-id + 1)
+        - `:historical_schemas` - Previous schemas for field ID tracking
+      Example: `fn schema, ctx -> SchemaEvolution.add_column(schema, %{name: "new_field", type: "string"}, ctx) end`
+    - opts: Configuration options
+      - `:mode` - Validation mode (:strict, :permissive, :none)
+      - `:force` - Skip validation (same as mode: :none)
+      - `:table_empty?` - Whether table has data
+      - `:storage`, `:base_url` - Storage configuration
+
+  ## Returns
+    `{:ok, updated_metadata}` - Metadata with evolved schema
+    `{:ok, updated_metadata, warnings}` - Success with warnings (permissive mode)
+    `{:error, reason}` - Evolution or validation failed
+
+  ## Examples
+
+      # Add a column
+      evolve_schema(table_path, fn schema, ctx ->
+        SchemaEvolution.add_column(schema, %{name: "email", type: "string"}, ctx)
+      end)
+
+      # Rename a column (doesn't need context)
+      evolve_schema(table_path, fn schema, _ctx ->
+        SchemaEvolution.rename_column(schema, "old_name", "new_name")
+      end)
+  """
+  @spec evolve_schema(String.t(), function(), keyword()) ::
+          {:ok, map()} | {:ok, map(), String.t()} | {:error, term()}
+  def evolve_schema(table_path, evolution_fn, opts \\ []) do
+    with {:ok, metadata} <- load(table_path, opts),
+         current_schema <- get_current_schema(metadata) do
+      # Build context for evolution operations
+      context =
+        opts
+        |> Keyword.put(:next_field_id, metadata["last-column-id"] + 1)
+        |> Keyword.put(:historical_schemas, get_historical_schemas(metadata))
+
+      evolution_result = evolution_fn.(current_schema, context)
+
+      case evolution_result do
+        {:ok, evolved_schema} ->
+          updated_metadata = apply_schema_evolution(metadata, evolved_schema)
+          {:ok, updated_metadata}
+
+        {:ok, evolved_schema, warnings} ->
+          updated_metadata = apply_schema_evolution(metadata, evolved_schema)
+          {:ok, updated_metadata, warnings}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  @doc """
+  Gets the current schema from metadata.
+
+  ## Parameters
+    - metadata: Table metadata map
+
+  ## Returns
+    Current schema map
+
+  ## Examples
+
+      iex> schema = Metadata.get_current_schema(metadata)
+      iex> schema["schema-id"]
+      0
+  """
+  @spec get_current_schema(map()) :: map()
+  def get_current_schema(metadata) do
+    current_schema_id = metadata["current-schema-id"]
+    schemas = metadata["schemas"] || []
+
+    Enum.find(schemas, fn schema ->
+      schema["schema-id"] == current_schema_id
+    end)
+  end
+
+  @doc """
   Saves metadata as v{N}.metadata.json and updates version-hint.text.
 
   ## Parameters
@@ -261,6 +354,63 @@ defmodule Iceberg.Metadata do
   defp get_source_file_from_snapshot(_), do: nil
 
   ## Private Functions
+
+  defp apply_schema_evolution(metadata, evolved_schema) do
+    # Generate next schema ID
+    next_schema_id = get_next_schema_id(metadata)
+
+    # Add schema-id to evolved schema
+    evolved_schema_with_id = Map.put(evolved_schema, "schema-id", next_schema_id)
+
+    # Update last-column-id - use max of current last-column-id and max field ID in evolved schema
+    # This ensures field IDs are never reused even after dropping columns
+    current_last_column_id = metadata["last-column-id"] || 0
+    max_field_id = get_max_field_id(evolved_schema)
+    new_last_column_id = max(current_last_column_id, max_field_id)
+
+    # Rebuild name mapping with new schema
+    name_mapping = build_name_mapping(evolved_schema_with_id)
+
+    metadata
+    |> Map.put("current-schema-id", next_schema_id)
+    |> Map.put("last-column-id", new_last_column_id)
+    |> Map.put("last-updated-ms", System.system_time(:millisecond))
+    |> Map.update("schemas", [evolved_schema_with_id], &(&1 ++ [evolved_schema_with_id]))
+    |> Map.update("properties", %{}, fn props ->
+      Map.put(props, "schema.name-mapping.default", name_mapping)
+    end)
+  end
+
+  defp get_next_schema_id(metadata) do
+    schemas = metadata["schemas"] || []
+
+    if Enum.empty?(schemas) do
+      0
+    else
+      max_id = schemas |> Enum.map(& &1["schema-id"]) |> Enum.max()
+      max_id + 1
+    end
+  end
+
+  defp get_max_field_id(schema) do
+    fields = schema["fields"] || []
+
+    if Enum.empty?(fields) do
+      0
+    else
+      fields |> Enum.map(& &1["id"]) |> Enum.max()
+    end
+  end
+
+  defp get_historical_schemas(metadata) do
+    current_schema_id = metadata["current-schema-id"]
+    schemas = metadata["schemas"] || []
+
+    # Return all schemas except the current one
+    Enum.reject(schemas, fn schema ->
+      schema["schema-id"] == current_schema_id
+    end)
+  end
 
   defp read_version_hint(table_path, opts) do
     storage = Iceberg.Config.storage_backend(opts)

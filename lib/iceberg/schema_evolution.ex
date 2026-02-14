@@ -86,8 +86,8 @@ defmodule Iceberg.SchemaEvolution do
     required = field_spec[:required] || field_spec["required"] || false
     doc = field_spec[:doc] || field_spec["doc"]
 
-    # Generate next field ID
-    next_id = get_next_field_id(schema)
+    # Generate next field ID (use provided next_field_id or calculate from schema and historical schemas)
+    next_id = get_next_field_id(schema, opts)
 
     new_field = %{
       "id" => next_id,
@@ -346,14 +346,24 @@ defmodule Iceberg.SchemaEvolution do
     end
   end
 
-  defp get_next_field_id(schema) do
-    fields = get_fields(schema)
-
-    if Enum.empty?(fields) do
-      1
+  defp get_next_field_id(schema, opts) do
+    # If next_field_id is provided explicitly (e.g., from metadata's last-column-id), use it
+    if Keyword.has_key?(opts, :next_field_id) do
+      Keyword.get(opts, :next_field_id)
     else
-      max_id = fields |> Enum.map(& &1["id"]) |> Enum.max()
-      max_id + 1
+      # Otherwise calculate from current schema and historical schemas
+      historical_schemas = Keyword.get(opts, :historical_schemas, [])
+
+      all_field_ids =
+        Enum.flat_map([schema | historical_schemas], fn s ->
+          get_fields(s) |> Enum.map(& &1["id"])
+        end)
+
+      if Enum.empty?(all_field_ids) do
+        1
+      else
+        Enum.max(all_field_ids) + 1
+      end
     end
   end
 
