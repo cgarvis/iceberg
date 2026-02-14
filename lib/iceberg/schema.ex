@@ -140,57 +140,10 @@ defmodule Iceberg.Schema do
       end
 
       def __partition_spec__ do
-        case @iceberg_partition_spec do
-          nil ->
-            %{
-              "spec-id" => 0,
-              "fields" => []
-            }
-
-          # Simple transform (no parameter)
-          {transform, field, nil} ->
-            # Find field ID
-            fields = @iceberg_fields |> Enum.reverse()
-            field_id = Enum.find_index(fields, fn {name, _, _, _} -> name == field end)
-
-            if field_id do
-              %{
-                "spec-id" => 0,
-                "fields" => [
-                  %{
-                    "name" => "#{field}_#{transform}",
-                    "transform" => to_string(transform),
-                    "source-id" => field_id + 1,
-                    "field-id" => 1000 + field_id
-                  }
-                ]
-              }
-            else
-              raise "Partition field #{field} not found in schema"
-            end
-
-          # Parameterized transform (bucket[N], truncate[W])
-          {transform, field, param} ->
-            # Find field ID
-            fields = @iceberg_fields |> Enum.reverse()
-            field_id = Enum.find_index(fields, fn {name, _, _, _} -> name == field end)
-
-            if field_id do
-              %{
-                "spec-id" => 0,
-                "fields" => [
-                  %{
-                    "name" => "#{field}_#{transform}",
-                    "transform" => "#{transform}[#{param}]",
-                    "source-id" => field_id + 1,
-                    "field-id" => 1000 + field_id
-                  }
-                ]
-              }
-            else
-              raise "Partition field #{field} not found in schema"
-            end
-        end
+        Iceberg.Schema.build_partition_spec(
+          @iceberg_partition_spec,
+          @iceberg_fields |> Enum.reverse()
+        )
       end
 
       def __fields__ do
@@ -202,12 +155,53 @@ defmodule Iceberg.Schema do
       end
 
       def __partition_field__ do
-        case @iceberg_partition_spec do
-          nil -> nil
-          {_transform, field, _param} -> field
-        end
+        Iceberg.Schema.get_partition_field(@iceberg_partition_spec)
       end
     end
+  end
+
+  @doc false
+  def get_partition_field(nil), do: nil
+  def get_partition_field({_transform, field, _param}), do: field
+
+  @doc false
+  def build_partition_spec(nil, _fields) do
+    %{"spec-id" => 0, "fields" => []}
+  end
+
+  def build_partition_spec({transform, field, param}, fields) do
+    field_id = find_field_id(fields, field)
+
+    if field_id do
+      %{
+        "spec-id" => 0,
+        "fields" => [build_partition_field(transform, field, param, field_id)]
+      }
+    else
+      raise "Partition field #{field} not found in schema"
+    end
+  end
+
+  defp find_field_id(fields, field) do
+    Enum.find_index(fields, fn {name, _, _, _} -> name == field end)
+  end
+
+  defp build_partition_field(transform, field, nil, field_id) do
+    %{
+      "name" => "#{field}_#{transform}",
+      "transform" => to_string(transform),
+      "source-id" => field_id + 1,
+      "field-id" => 1000 + field_id
+    }
+  end
+
+  defp build_partition_field(transform, field, param, field_id) do
+    %{
+      "name" => "#{field}_#{transform}",
+      "transform" => "#{transform}[#{param}]",
+      "source-id" => field_id + 1,
+      "field-id" => 1000 + field_id
+    }
   end
 
   @doc false

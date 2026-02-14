@@ -1,7 +1,7 @@
 defmodule Iceberg.SchemaTest do
   use ExUnit.Case, async: true
 
-  alias Iceberg.Test.Schemas.{Events, Simple, AllPrimitiveTypes}
+  alias Iceberg.Test.Schemas.{AllPrimitiveTypes, Events, Simple}
 
   describe "schema DSL" do
     test "compiles and generates __table_path__" do

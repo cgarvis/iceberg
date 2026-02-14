@@ -163,19 +163,7 @@ defmodule Iceberg.Avro.Encoder do
     if map_size(map) == 0 do
       encode_long(0)
     else
-      count = encode_long(map_size(map))
-
-      # Convert map entries to records with "key" and "value" fields
-      items =
-        Enum.map(map, fn {k, v} ->
-          # Ensure key is an integer if it came in as a string
-          key_value = if is_binary(k), do: String.to_integer(k), else: k
-          record = %{"key" => key_value, "value" => v}
-          encode_value(record, record_schema)
-        end)
-
-      block_end = encode_long(0)
-      [count, items, block_end]
+      encode_map_as_array(map, record_schema)
     end
   end
 
@@ -211,16 +199,77 @@ defmodule Iceberg.Avro.Encoder do
   # Null value
   defp encode_value(nil, _type), do: <<>>
 
+  ## Helper Functions
+
+  defp encode_map_as_array(map, record_schema) do
+    count = encode_long(map_size(map))
+
+    # Convert map entries to records with "key" and "value" fields
+    items =
+      Enum.map(map, fn {k, v} ->
+        record = %{"key" => normalize_map_key(k), "value" => v}
+        encode_value(record, record_schema)
+      end)
+
+    block_end = encode_long(0)
+    [count, items, block_end]
+  end
+
+  # Ensure key is an integer if it came in as a string
+  defp normalize_map_key(k) when is_binary(k), do: String.to_integer(k)
+  defp normalize_map_key(k), do: k
+
   ## Primitive Encodings
 
-  @doc false
+  @doc """
+  Encodes a signed long (64-bit integer) using zigzag encoding.
+
+  Zigzag encoding converts signed integers to unsigned by mapping:
+  - 0 -> 0, -1 -> 1, 1 -> 2, -2 -> 3, 2 -> 4, etc.
+
+  This ensures small absolute values have small encodings regardless of sign.
+
+  ## Examples
+
+      iex> Iceberg.Avro.Encoder.encode_long(0)
+      <<0>>
+
+      iex> Iceberg.Avro.Encoder.encode_long(-1)
+      <<1>>
+
+      iex> Iceberg.Avro.Encoder.encode_long(1)
+      <<2>>
+
+      iex> Iceberg.Avro.Encoder.encode_long(-2)
+      <<3>>
+
+      iex> Iceberg.Avro.Encoder.encode_long(64) |> IO.iodata_to_binary()
+      <<128, 1>>
+
+  """
   def encode_long(value) when is_integer(value) do
-    # Zigzag encoding: convert signed to unsigned
+    # Zigzag encoding: convert signed to unsigned (64-bit)
     zigzag = Bitwise.bxor(value <<< 1, value >>> 63)
     encode_varint(zigzag)
   end
 
-  @doc false
+  @doc """
+  Encodes a signed int (32-bit integer) using zigzag encoding.
+
+  Similar to encode_long/1 but for 32-bit integers.
+
+  ## Examples
+
+      iex> Iceberg.Avro.Encoder.encode_int(0)
+      <<0>>
+
+      iex> Iceberg.Avro.Encoder.encode_int(-1)
+      <<1>>
+
+      iex> Iceberg.Avro.Encoder.encode_int(1)
+      <<2>>
+
+  """
   def encode_int(value) when is_integer(value) do
     # Zigzag encoding for 32-bit int
     zigzag = Bitwise.bxor(value <<< 1, value >>> 31)

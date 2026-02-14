@@ -1,4 +1,7 @@
 defmodule Iceberg.Test.Schemas.Events do
+  @moduledoc """
+  Test schema for event tables with day partitioning.
+  """
   use Iceberg.Schema
 
   schema "canonical/events" do
@@ -13,6 +16,9 @@ defmodule Iceberg.Test.Schemas.Events do
 end
 
 defmodule Iceberg.Test.Schemas.Simple do
+  @moduledoc """
+  Simple test schema without partitioning.
+  """
   use Iceberg.Schema
 
   schema "canonical/simple" do
@@ -23,6 +29,9 @@ defmodule Iceberg.Test.Schemas.Simple do
 end
 
 defmodule Iceberg.Test.Schemas.AllPrimitiveTypes do
+  @moduledoc """
+  Test schema demonstrating all primitive Iceberg types.
+  """
   use Iceberg.Schema
 
   schema "canonical/all_primitive_types" do

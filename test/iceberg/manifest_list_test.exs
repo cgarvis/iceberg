@@ -11,13 +11,13 @@ defmodule Iceberg.ManifestListTest do
           manifest_path: "s3://bucket/table/metadata/manifest-1.avro",
           manifest_length: 5432,
           partition_spec_id: 0,
-          added_snapshot_id: 12345,
+          added_snapshot_id: 12_345,
           added_data_files_count: 10,
           added_rows_count: 1000
         }
       ]
 
-      {:ok, binary} = ManifestList.create(manifests, 12345, 1)
+      {:ok, binary} = ManifestList.create(manifests, 12_345, 1)
 
       assert <<0x4F, 0x62, 0x6A, 0x01, _rest::binary>> = binary
     end

@@ -277,34 +277,37 @@ defmodule Iceberg.Manifest do
   # Handles both atom keys (:fields) and string keys ("fields")
   defp build_partition_schema(partition_spec) do
     fields = get_partition_fields(partition_spec)
+    partition_fields = build_partition_fields(fields)
 
-    if is_list(fields) and fields != [] do
-      partition_fields =
-        Enum.map(fields, fn field ->
-          field_name =
-            field[:name] || field["name"] ||
-              "partition_#{field[:source_id] || field["source-id"]}"
+    %{
+      "type" => "record",
+      "name" => "r102",
+      "fields" => partition_fields
+    }
+  end
 
-          field_id = field[:"field-id"] || field["field-id"]
-          # Partition field type for transforms: day/month/year -> int, identity -> keep original
-          field_type = partition_type_for_transform(field[:transform] || field["transform"])
+  defp build_partition_fields([]), do: []
 
-          base = %{"name" => field_name, "type" => avro_type(field_type)}
-          if field_id, do: Map.put(base, "field-id", field_id), else: base
-        end)
+  defp build_partition_fields(fields) when is_list(fields) do
+    Enum.map(fields, &build_partition_field/1)
+  end
 
-      %{
-        "type" => "record",
-        "name" => "r102",
-        "fields" => partition_fields
-      }
-    else
-      %{
-        "type" => "record",
-        "name" => "r102",
-        "fields" => []
-      }
-    end
+  # Gets a field value from a map, checking multiple keys
+  defp get_field_value(map, keys, default \\ nil) when is_list(keys) do
+    Enum.find_value(keys, default, &Map.get(map, &1))
+  end
+
+  defp build_partition_field(field) do
+    field_name = get_field_value(field, [:name, "name"], "partition_#{get_source_id(field)}")
+    field_id = get_field_value(field, [:"field-id", "field-id"])
+    field_type = partition_type_for_transform(get_field_value(field, [:transform, "transform"]))
+
+    base = %{"name" => field_name, "type" => avro_type(field_type)}
+    if field_id, do: Map.put(base, "field-id", field_id), else: base
+  end
+
+  defp get_source_id(field) do
+    get_field_value(field, [:source_id, "source-id"])
   end
 
   # Returns the Iceberg type for partition values based on transform
@@ -373,26 +376,31 @@ defmodule Iceberg.Manifest do
   defp extract_partition_values(data_file, partition_spec) do
     fields = get_partition_fields(partition_spec)
 
-    if is_list(fields) and fields != [] do
-      partition_data = data_file[:partition_values] || data_file["partition_values"] || %{}
-
-      Enum.reduce(fields, %{}, fn field, acc ->
-        field_name =
-          field[:name] || field["name"] ||
-            "partition_#{field[:source_id] || field["source-id"]}"
-
-        transform = field[:transform] || field["transform"]
-
-        raw_value =
-          Map.get(partition_data, field_name) || Map.get(partition_data, to_string(field_name))
-
-        # Convert value based on transform type
-        value = convert_partition_value(raw_value, transform, partition_data)
-        Map.put(acc, field_name, value)
-      end)
+    if has_partition_fields?(fields) do
+      partition_data = get_field_value(data_file, [:partition_values, "partition_values"], %{})
+      extract_field_values(fields, partition_data)
     else
       %{}
     end
+  end
+
+  defp has_partition_fields?([]), do: false
+  defp has_partition_fields?(fields) when is_list(fields), do: true
+  defp has_partition_fields?(_), do: false
+
+  defp extract_field_values(fields, partition_data) do
+    Enum.reduce(fields, %{}, fn field, acc ->
+      field_name = get_field_value(field, [:name, "name"], "partition_#{get_source_id(field)}")
+      transform = get_field_value(field, [:transform, "transform"])
+      raw_value = get_partition_data_value(partition_data, field_name)
+      value = convert_partition_value(raw_value, transform, partition_data)
+
+      Map.put(acc, field_name, value)
+    end)
+  end
+
+  defp get_partition_data_value(partition_data, field_name) do
+    Map.get(partition_data, field_name) || Map.get(partition_data, to_string(field_name))
   end
 
   # Converts partition value to appropriate type based on transform

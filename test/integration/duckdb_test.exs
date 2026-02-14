@@ -1,6 +1,9 @@
 defmodule Iceberg.Integration.DuckDBTest do
   use ExUnit.Case, async: false
 
+  alias Iceberg.Storage.Local
+  alias Iceberg.Test.DuckDBCompute
+
   @moduletag :duckdb
 
   setup do
@@ -9,8 +12,8 @@ defmodule Iceberg.Integration.DuckDBTest do
 
     File.mkdir_p!(tmpdir)
 
-    {:ok, _} = Iceberg.Storage.Local.start_link()
-    Iceberg.Storage.Local.set_base_dir(tmpdir)
+    {:ok, _} = Local.start_link()
+    Local.set_base_dir(tmpdir)
 
     on_exit(fn ->
       IO.puts("\n\nTest artifacts left in: #{tmpdir}")
@@ -32,7 +35,7 @@ defmodule Iceberg.Integration.DuckDBTest do
     TO '#{parquet_file}' (FORMAT PARQUET)
     """
 
-    {:ok, :executed} = Iceberg.Test.DuckDBCompute.execute(:memory, write_sql)
+    {:ok, :executed} = DuckDBCompute.execute(:memory, write_sql)
     assert File.exists?(parquet_file)
 
     # Step 2: Create the Iceberg table
@@ -42,8 +45,8 @@ defmodule Iceberg.Integration.DuckDBTest do
     ]
 
     opts = [
-      storage: Iceberg.Storage.Local,
-      compute: Iceberg.Test.DuckDBCompute,
+      storage: Local,
+      compute: DuckDBCompute,
       base_url: tmpdir
     ]
 
@@ -75,7 +78,7 @@ defmodule Iceberg.Integration.DuckDBTest do
     assert File.exists?(metadata_path)
 
     scan_sql = "SELECT * FROM iceberg_scan('#{metadata_path}') ORDER BY id"
-    {:ok, rows} = Iceberg.Test.DuckDBCompute.query(:memory, scan_sql)
+    {:ok, rows} = DuckDBCompute.query(:memory, scan_sql)
 
     assert length(rows) == 2
     assert Enum.at(rows, 0)["id"] == "1"

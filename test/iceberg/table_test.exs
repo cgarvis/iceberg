@@ -1,18 +1,19 @@
 defmodule Iceberg.TableTest do
   use ExUnit.Case
 
-  alias Iceberg.Table
   alias Iceberg.Storage.Memory
+  alias Iceberg.Table
+  alias Iceberg.Test.MockCompute
 
   @opts [
     storage: Memory,
-    compute: Iceberg.Test.MockCompute,
+    compute: MockCompute,
     base_url: "memory://test"
   ]
 
   setup do
     Memory.clear()
-    Iceberg.Test.MockCompute.clear()
+    MockCompute.clear()
     :ok
   end
 

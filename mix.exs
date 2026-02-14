@@ -12,6 +12,8 @@ defmodule Iceberg.MixProject do
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       deps: deps(),
+      aliases: aliases(),
+      preferred_cli_env: [precommit: :test],
       package: package(),
       name: "Iceberg",
       description: "Apache Iceberg v2 table format implementation in pure Elixir",
@@ -31,7 +33,9 @@ defmodule Iceberg.MixProject do
 
   defp deps do
     [
-      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
     ]
   end
 
@@ -48,6 +52,18 @@ defmodule Iceberg.MixProject do
       main: "Iceberg",
       source_ref: "v#{@version}",
       source_url: @source_url
+    ]
+  end
+
+  defp aliases do
+    [
+      precommit: [
+        "format --check-formatted",
+        "compile --warnings-as-errors",
+        "test",
+        "credo --strict",
+        "dialyzer"
+      ]
     ]
   end
 end

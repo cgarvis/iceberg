@@ -29,7 +29,7 @@ defmodule Iceberg.ManifestTest do
         }
       ]
 
-      {:ok, binary} = Manifest.create(data_files, 12345, @empty_partition_spec)
+      {:ok, binary} = Manifest.create(data_files, 12_345, @empty_partition_spec)
 
       assert <<0x4F, 0x62, 0x6A, 0x01, _rest::binary>> = binary
     end
@@ -125,7 +125,7 @@ defmodule Iceberg.ManifestTest do
           file_path: "test.parquet",
           file_size: 100,
           record_count: 10,
-          partition_values: %{"date_day" => 19738}
+          partition_values: %{"date_day" => 19_738}
         }
       ]
 

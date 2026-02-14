@@ -124,10 +124,10 @@ defmodule Iceberg.SnapshotTest do
         ]
       })
 
-      opts = Keyword.put(@opts, :snapshot_id, 99999)
+      opts = Keyword.put(@opts, :snapshot_id, 99_999)
       {:ok, snapshot} = Snapshot.create(:conn, "test/table", "test/**/*.parquet", opts)
 
-      assert snapshot["snapshot-id"] == 99999
+      assert snapshot["snapshot-id"] == 99_999
     end
   end
 end

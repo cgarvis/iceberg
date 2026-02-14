@@ -100,27 +100,27 @@ defmodule Iceberg.ManifestList do
 
   defp build_manifest_entry(manifest, _snapshot_id, sequence_number) do
     %{
-      "manifest_path" => manifest[:manifest_path] || manifest["manifest_path"],
-      "manifest_length" => manifest[:manifest_length] || manifest["manifest_length"] || 0,
-      "partition_spec_id" => manifest[:partition_spec_id] || manifest["partition_spec_id"] || 0,
+      "manifest_path" => get_field(manifest, :manifest_path),
+      "manifest_length" => get_field(manifest, :manifest_length, 0),
+      "partition_spec_id" => get_field(manifest, :partition_spec_id, 0),
       "content" => 0,
       # 0 = DATA
       "sequence_number" => sequence_number,
       "min_sequence_number" => sequence_number,
-      "added_snapshot_id" => manifest[:added_snapshot_id] || manifest["added_snapshot_id"] || 0,
-      "added_data_files_count" =>
-        manifest[:added_data_files_count] || manifest["added_data_files_count"] || 0,
-      "existing_data_files_count" =>
-        manifest[:existing_data_files_count] || manifest["existing_data_files_count"] || 0,
-      "deleted_data_files_count" =>
-        manifest[:deleted_data_files_count] || manifest["deleted_data_files_count"] || 0,
-      "added_rows_count" => manifest[:added_rows_count] || manifest["added_rows_count"] || 0,
-      "existing_rows_count" =>
-        manifest[:existing_rows_count] || manifest["existing_rows_count"] || 0,
-      "deleted_rows_count" =>
-        manifest[:deleted_rows_count] || manifest["deleted_rows_count"] || 0,
-      "partitions" => manifest[:partitions],
+      "added_snapshot_id" => get_field(manifest, :added_snapshot_id, 0),
+      "added_data_files_count" => get_field(manifest, :added_data_files_count, 0),
+      "existing_data_files_count" => get_field(manifest, :existing_data_files_count, 0),
+      "deleted_data_files_count" => get_field(manifest, :deleted_data_files_count, 0),
+      "added_rows_count" => get_field(manifest, :added_rows_count, 0),
+      "existing_rows_count" => get_field(manifest, :existing_rows_count, 0),
+      "deleted_rows_count" => get_field(manifest, :deleted_rows_count, 0),
+      "partitions" => get_field(manifest, :partitions),
       "key_metadata" => nil
     }
+  end
+
+  # Gets a field from a map, checking both atom and string keys
+  defp get_field(map, key, default \\ nil) do
+    map[key] || map[to_string(key)] || default
   end
 end

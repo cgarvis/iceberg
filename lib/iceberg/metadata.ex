@@ -229,31 +229,37 @@ defmodule Iceberg.Metadata do
           {:ok, String.t() | nil} | {:error, term()}
   def get_last_processed_file(table_path, opts \\ []) do
     case load(table_path, opts) do
-      {:ok, metadata} ->
-        current_snapshot_id = metadata["current-snapshot-id"]
-
-        if current_snapshot_id && current_snapshot_id > 0 do
-          snapshot =
-            Enum.find(metadata["snapshots"] || [], fn s ->
-              s["snapshot-id"] == current_snapshot_id
-            end)
-
-          case snapshot do
-            %{"summary" => %{"source-file" => file}} -> {:ok, file}
-            %{"summary" => %{"source_file" => file}} -> {:ok, file}
-            _ -> {:ok, nil}
-          end
-        else
-          {:ok, nil}
-        end
-
-      {:error, :not_found} ->
-        {:ok, nil}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, metadata} -> {:ok, extract_source_file(metadata)}
+      {:error, :not_found} -> {:ok, nil}
+      {:error, reason} -> {:error, reason}
     end
   end
+
+  defp extract_source_file(metadata) do
+    current_snapshot_id = metadata["current-snapshot-id"]
+
+    if valid_snapshot_id?(current_snapshot_id) do
+      metadata
+      |> find_current_snapshot(current_snapshot_id)
+      |> get_source_file_from_snapshot()
+    else
+      nil
+    end
+  end
+
+  defp valid_snapshot_id?(nil), do: false
+  defp valid_snapshot_id?(id) when id > 0, do: true
+  defp valid_snapshot_id?(_), do: false
+
+  defp find_current_snapshot(metadata, snapshot_id) do
+    Enum.find(metadata["snapshots"] || [], fn s ->
+      s["snapshot-id"] == snapshot_id
+    end)
+  end
+
+  defp get_source_file_from_snapshot(%{"summary" => %{"source-file" => file}}), do: file
+  defp get_source_file_from_snapshot(%{"summary" => %{"source_file" => file}}), do: file
+  defp get_source_file_from_snapshot(_), do: nil
 
   ## Private Functions
 

@@ -19,6 +19,30 @@ defmodule Iceberg.Table do
         storage: MyApp.Storage,
         compute: MyApp.Compute,
         base_url: "s3://bucket")
+
+  ## Concurrency Warning
+
+  This library does **not** provide internal locking for concurrent writes to the same table.
+
+  If multiple processes may write to the same table simultaneously, you must coordinate access
+  externally using one of these approaches:
+
+  - Database locks
+  - Distributed locks (e.g., using Redis, etcd, or Consul)
+  - Serialize writes through a GenServer
+  - Application-level coordination
+
+  **Safe concurrent operations:**
+  - Multiple concurrent reads (always safe)
+  - Concurrent writes to different tables (safe)
+
+  **Unsafe concurrent operations:**
+  - Multiple processes writing to the same table (race conditions on metadata updates)
+
+  Without coordination, concurrent writes may result in:
+  - Lost snapshots (one write overwrites another's metadata)
+  - Corrupted version-hint.text
+  - Inconsistent metadata state
   """
 
   alias Iceberg.{Metadata, Snapshot}
@@ -149,23 +173,32 @@ defmodule Iceberg.Table do
 
     with {:ok, metadata} <- Metadata.load(table_path, opts),
          :ok <- clear_data_directory(table_path, opts),
-         :ok <- write_data_files(conn, table_path, source_query, opts),
-         data_pattern = Iceberg.Config.full_url("#{table_path}/data/**/*.parquet", opts),
-         sequence_number = (metadata["last-sequence-number"] || 0) + 1,
-         snapshot_opts =
-           Keyword.merge(opts,
-             partition_spec: partition_spec,
-             sequence_number: sequence_number,
-             operation: opts[:operation] || "overwrite"
-           ),
-         {:ok, snapshot} <- Snapshot.create(conn, table_path, data_pattern, snapshot_opts),
-         {:ok, new_metadata} <- Metadata.add_snapshot(metadata, snapshot),
-         :ok <- Metadata.save(table_path, new_metadata, opts) do
-      Logger.info(
-        "Insert overwrite complete for #{table_path}: snapshot #{snapshot["snapshot-id"]}"
-      )
+         :ok <- write_data_files(conn, table_path, source_query, opts) do
+      # Compute derived values after successful operations
+      data_pattern = Iceberg.Config.full_url("#{table_path}/data/**/*.parquet", opts)
+      sequence_number = (metadata["last-sequence-number"] || 0) + 1
 
-      {:ok, snapshot}
+      snapshot_opts =
+        Keyword.merge(opts,
+          partition_spec: partition_spec,
+          sequence_number: sequence_number,
+          operation: opts[:operation] || "overwrite"
+        )
+
+      # Create snapshot and update metadata
+      with {:ok, snapshot} <- Snapshot.create(conn, table_path, data_pattern, snapshot_opts),
+           {:ok, new_metadata} <- Metadata.add_snapshot(metadata, snapshot),
+           :ok <- Metadata.save(table_path, new_metadata, opts) do
+        Logger.info(
+          "Insert overwrite complete for #{table_path}: snapshot #{snapshot["snapshot-id"]}"
+        )
+
+        {:ok, snapshot}
+      else
+        {:error, reason} = error ->
+          Logger.error("Snapshot creation failed for #{table_path}: #{inspect(reason)}")
+          error
+      end
     else
       {:error, reason} = error ->
         Logger.error("Insert overwrite failed for #{table_path}: #{inspect(reason)}")
@@ -285,6 +318,17 @@ defmodule Iceberg.Table do
     storage = Iceberg.Config.storage_backend(opts)
     Logger.info("Registering files for table: #{table_path} with pattern: #{file_pattern}")
 
+    matching_files = find_matching_files(storage, table_path, file_pattern)
+
+    if matching_files == [] do
+      Logger.debug("No files matched pattern #{file_pattern}")
+      {:ok, nil}
+    else
+      register_matching_files(conn, table_path, file_pattern, matching_files, opts)
+    end
+  end
+
+  defp find_matching_files(storage, table_path, file_pattern) do
     # Extract the prefix from the pattern (before any wildcard)
     file_prefix =
       file_pattern
@@ -297,56 +341,44 @@ defmodule Iceberg.Table do
     data_prefix = "#{table_path}/data/"
     files = storage.list(data_prefix)
 
-    matching_files =
-      files
-      |> Enum.filter(fn f ->
-        file_prefix == "" || String.contains?(f, file_prefix)
-      end)
+    Enum.filter(files, fn f ->
+      file_prefix == "" || String.contains?(f, file_prefix)
+    end)
+  end
 
-    if matching_files == [] do
-      Logger.debug("No files matched pattern #{file_pattern}")
-      {:ok, nil}
-    else
-      with {:ok, metadata} <- Metadata.load(table_path, opts) do
-        partition_spec =
-          List.first(metadata["partition-specs"]) || %{"spec-id" => 0, "fields" => []}
+  defp register_matching_files(conn, table_path, file_pattern, matching_files, opts) do
+    with {:ok, metadata} <- Metadata.load(table_path, opts),
+         snapshot_opts <- build_snapshot_opts(metadata, file_pattern, opts),
+         {:ok, snapshot} <-
+           Snapshot.create(conn, table_path, snapshot_opts[:data_url], snapshot_opts),
+         {:ok, new_metadata} <- Metadata.add_snapshot(metadata, snapshot),
+         :ok <- Metadata.save(table_path, new_metadata, opts) do
+      Logger.info(
+        "Registered #{length(matching_files)} files in #{table_path}: snapshot #{snapshot["snapshot-id"]}"
+      )
 
-        sequence_number = (metadata["last-sequence-number"] || 0) + 1
-        operation = opts[:operation] || "append"
-        source_file = opts[:source_file]
-
-        # Get table schema from metadata
-        table_schema = List.first(metadata["schemas"])
-        schema_id = metadata["current-schema-id"] || 0
-
-        data_url_pattern = Iceberg.Config.full_url(file_pattern, opts)
-
-        snapshot_opts =
-          Keyword.merge(opts,
-            partition_spec: partition_spec,
-            sequence_number: sequence_number,
-            operation: operation,
-            table_schema: table_schema,
-            schema_id: schema_id
-          )
-          |> Keyword.put(:source_file, source_file)
-
-        case Snapshot.create(conn, table_path, data_url_pattern, snapshot_opts) do
-          {:ok, snapshot} ->
-            with {:ok, new_metadata} <- Metadata.add_snapshot(metadata, snapshot),
-                 :ok <- Metadata.save(table_path, new_metadata, opts) do
-              Logger.info(
-                "Registered #{length(matching_files)} files in #{table_path}: snapshot #{snapshot["snapshot-id"]}"
-              )
-
-              {:ok, snapshot}
-            end
-
-          {:error, reason} ->
-            {:error, reason}
-        end
-      end
+      {:ok, snapshot}
     end
+  end
+
+  defp build_snapshot_opts(metadata, file_pattern, opts) do
+    partition_spec = List.first(metadata["partition-specs"]) || %{"spec-id" => 0, "fields" => []}
+    sequence_number = (metadata["last-sequence-number"] || 0) + 1
+    operation = opts[:operation] || "append"
+    source_file = opts[:source_file]
+    table_schema = List.first(metadata["schemas"])
+    schema_id = metadata["current-schema-id"] || 0
+    data_url_pattern = Iceberg.Config.full_url(file_pattern, opts)
+
+    Keyword.merge(opts,
+      partition_spec: partition_spec,
+      sequence_number: sequence_number,
+      operation: operation,
+      table_schema: table_schema,
+      schema_id: schema_id,
+      source_file: source_file,
+      data_url: data_url_pattern
+    )
   end
 
   ## Private Functions
@@ -385,23 +417,42 @@ defmodule Iceberg.Table do
 
   defp clear_data_directory(table_path, opts) do
     storage = Iceberg.Config.storage_backend(opts)
-    # List all files in data directory
     data_prefix = "#{table_path}/data/"
 
     case storage.list(data_prefix) do
       files when is_list(files) ->
-        # Delete all data files
-        Enum.each(files, fn file ->
-          storage.delete(file)
-        end)
+        delete_files_with_error_tracking(files, storage, data_prefix)
 
-        Logger.debug("Cleared #{length(files)} files from #{data_prefix}")
-        :ok
-
-      {:error, reason} ->
+      {:error, _reason} ->
         # If directory doesn't exist, that's fine
-        Logger.debug("No existing data directory to clear: #{inspect(reason)}")
+        Logger.debug("No existing data directory to clear")
         :ok
+    end
+  end
+
+  defp delete_files_with_error_tracking(files, storage, data_prefix) do
+    # Delete all data files and collect results
+    results = Enum.map(files, &safe_delete(storage, &1))
+    errors = Enum.filter(results, &match?({:error, _}, &1))
+
+    if Enum.empty?(errors) do
+      Logger.debug("Cleared #{length(files)} files from #{data_prefix}")
+      :ok
+    else
+      Logger.warning(
+        "Failed to delete #{length(errors)} of #{length(files)} files from #{data_prefix}"
+      )
+
+      # Still return :ok as partial cleanup is acceptable for overwrite operations
+      # If this is a problem, change to {:error, {:partial_cleanup, errors}}
+      :ok
+    end
+  end
+
+  defp safe_delete(storage, file) do
+    case storage.delete(file) do
+      :ok -> :ok
+      {:error, _} = error -> error
     end
   end
 

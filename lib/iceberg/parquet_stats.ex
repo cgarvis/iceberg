@@ -12,6 +12,7 @@ defmodule Iceberg.ParquetStats do
   ## Parameters
     - conn: Compute backend connection
     - file_pattern: Glob pattern for Parquet files (e.g., "s3://bucket/table/data/*.parquet")
+                    Must contain only safe characters: alphanumeric, `/`, `*`, `.`, `-`, `_`, `:`
     - opts: Configuration options (compute backend, etc.)
 
   ## Returns
@@ -21,11 +22,34 @@ defmodule Iceberg.ParquetStats do
       - `:record_count` - Number of rows
       - `:partition_values` - Extracted partition values (if pattern contains partitions)
 
-    `{:error, reason}` - Query execution error
+    `{:error, reason}` - Query execution error or invalid file pattern
+
+  ## Security
+
+  The file_pattern is validated to prevent SQL injection. Only trusted patterns
+  containing safe characters are allowed.
   """
   @spec extract(term(), String.t(), keyword()) ::
           {:ok, list(map())} | {:error, term()}
   def extract(conn, file_pattern, opts \\ []) do
+    with :ok <- validate_file_pattern(file_pattern) do
+      execute_stats_query(conn, file_pattern, opts)
+    end
+  end
+
+  # Validates file pattern contains only safe characters to prevent SQL injection
+  # Allowed: alphanumeric, /, *, ., -, _, :
+  defp validate_file_pattern(pattern) when is_binary(pattern) do
+    if String.match?(pattern, ~r/^[a-zA-Z0-9\/\*\.\-_:]+$/) do
+      :ok
+    else
+      {:error, {:invalid_file_pattern, "Pattern contains unsafe characters: #{pattern}"}}
+    end
+  end
+
+  defp validate_file_pattern(_), do: {:error, {:invalid_file_pattern, "Pattern must be a string"}}
+
+  defp execute_stats_query(conn, file_pattern, opts) do
     compute = Iceberg.Config.compute_backend(opts)
 
     # parquet_metadata returns one row per column per row group

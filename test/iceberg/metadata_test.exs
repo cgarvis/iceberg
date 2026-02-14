@@ -140,9 +140,9 @@ defmodule Iceberg.MetadataTest do
         Metadata.create_initial("test/table", %{"fields" => []}, %{"fields" => []}, @opts)
 
       snapshot = %{
-        "snapshot-id" => 12345,
+        "snapshot-id" => 12_345,
         "timestamp-ms" => System.system_time(:millisecond),
-        "manifest-list" => "memory://test/table/metadata/snap-12345.avro",
+        "manifest-list" => "memory://test/table/metadata/snap-12_345.avro",
         "summary" => %{"operation" => "append"},
         "schema-id" => 0
       }
@@ -157,16 +157,16 @@ defmodule Iceberg.MetadataTest do
         Metadata.create_initial("test/table", %{"fields" => []}, %{"fields" => []}, @opts)
 
       snapshot = %{
-        "snapshot-id" => 12345,
+        "snapshot-id" => 12_345,
         "timestamp-ms" => System.system_time(:millisecond),
-        "manifest-list" => "memory://test/table/metadata/snap-12345.avro",
+        "manifest-list" => "memory://test/table/metadata/snap-12_345.avro",
         "summary" => %{"operation" => "append"},
         "schema-id" => 0
       }
 
       {:ok, updated} = Metadata.add_snapshot(metadata, snapshot)
 
-      assert updated["current-snapshot-id"] == 12345
+      assert updated["current-snapshot-id"] == 12_345
     end
 
     test "appends to snapshot-log" do
@@ -174,9 +174,9 @@ defmodule Iceberg.MetadataTest do
         Metadata.create_initial("test/table", %{"fields" => []}, %{"fields" => []}, @opts)
 
       snapshot = %{
-        "snapshot-id" => 12345,
+        "snapshot-id" => 12_345,
         "timestamp-ms" => 1000,
-        "manifest-list" => "memory://test/table/metadata/snap-12345.avro",
+        "manifest-list" => "memory://test/table/metadata/snap-12_345.avro",
         "summary" => %{"operation" => "append"},
         "schema-id" => 0
       }
@@ -185,7 +185,7 @@ defmodule Iceberg.MetadataTest do
 
       assert length(updated["snapshot-log"]) == 1
       [log_entry] = updated["snapshot-log"]
-      assert log_entry["snapshot-id"] == 12345
+      assert log_entry["snapshot-id"] == 12_345
       assert log_entry["timestamp-ms"] == 1000
     end
 
@@ -194,9 +194,9 @@ defmodule Iceberg.MetadataTest do
         Metadata.create_initial("test/table", %{"fields" => []}, %{"fields" => []}, @opts)
 
       snapshot = %{
-        "snapshot-id" => 12345,
+        "snapshot-id" => 12_345,
         "timestamp-ms" => 1000,
-        "manifest-list" => "memory://test/table/metadata/snap-12345.avro",
+        "manifest-list" => "memory://test/table/metadata/snap-12_345.avro",
         "summary" => %{"operation" => "append"},
         "schema-id" => 0
       }
@@ -204,7 +204,7 @@ defmodule Iceberg.MetadataTest do
       {:ok, updated} = Metadata.add_snapshot(metadata, snapshot)
 
       assert length(updated["snapshots"]) == 1
-      assert List.first(updated["snapshots"])["snapshot-id"] == 12345
+      assert List.first(updated["snapshots"])["snapshot-id"] == 12_345
     end
   end
 
@@ -238,9 +238,9 @@ defmodule Iceberg.MetadataTest do
         Metadata.create_initial("test/table", %{"fields" => []}, %{"fields" => []}, @opts)
 
       snapshot = %{
-        "snapshot-id" => 12345,
+        "snapshot-id" => 12_345,
         "timestamp-ms" => 1000,
-        "manifest-list" => "memory://test/table/metadata/snap-12345.avro",
+        "manifest-list" => "memory://test/table/metadata/snap-12_345.avro",
         "summary" => %{"operation" => "append", "source-file" => "sources/data.jsonl"},
         "schema-id" => 0
       }
