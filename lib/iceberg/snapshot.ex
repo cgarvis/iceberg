@@ -11,7 +11,7 @@ defmodule Iceberg.Snapshot do
   6. Return snapshot metadata
   """
 
-  alias Iceberg.{Manifest, ManifestList, ParquetStats}
+  alias Iceberg.{Manifest, ManifestList, ParquetStats, UUID}
   require Logger
 
   @doc """
@@ -81,7 +81,7 @@ defmodule Iceberg.Snapshot do
 
   defp upload_manifest(avro_binary, table_path, snapshot_id, opts) do
     storage = Iceberg.Config.storage_backend(opts)
-    manifest_id = generate_uuid()
+    manifest_id = UUID.generate()
     relative_path = "#{table_path}/metadata/#{manifest_id}.avro"
     full_path = Iceberg.Config.full_url(relative_path, opts)
 
@@ -110,7 +110,7 @@ defmodule Iceberg.Snapshot do
 
   defp upload_manifest_list(avro_binary, table_path, snapshot_id, opts) do
     storage = Iceberg.Config.storage_backend(opts)
-    manifest_list_id = generate_uuid()
+    manifest_list_id = UUID.generate()
     relative_path = "#{table_path}/metadata/snap-#{snapshot_id}-#{manifest_list_id}.avro"
     full_path = Iceberg.Config.full_url(relative_path, opts)
 
@@ -156,15 +156,6 @@ defmodule Iceberg.Snapshot do
   defp generate_snapshot_id do
     # Use millisecond timestamp as snapshot ID
     System.system_time(:millisecond)
-  end
-
-  defp generate_uuid do
-    # Generate UUID v4
-    <<u0::48, _::4, u1::12, _::2, u2::62>> = :crypto.strong_rand_bytes(16)
-
-    <<u0::48, 4::4, u1::12, 2::2, u2::62>>
-    |> Base.encode16(case: :lower)
-    |> String.replace(~r/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "\\1-\\2-\\3-\\4-\\5")
   end
 
   defp total_records(stats) do

@@ -10,6 +10,7 @@ defmodule Iceberg.Metadata do
   - Snapshot history
   """
 
+  alias Iceberg.UUID
   require Logger
 
   @doc """
@@ -76,7 +77,7 @@ defmodule Iceberg.Metadata do
 
     metadata = %{
       "format-version" => 2,
-      "table-uuid" => generate_uuid(),
+      "table-uuid" => UUID.generate(),
       "location" => location,
       "last-sequence-number" => 0,
       "last-updated-ms" => System.system_time(:millisecond),
@@ -288,15 +289,6 @@ defmodule Iceberg.Metadata do
       "#{version}",
       content_type: "text/plain"
     )
-  end
-
-  defp generate_uuid do
-    # Generate UUID v4
-    <<u0::48, _::4, u1::12, _::2, u2::62>> = :crypto.strong_rand_bytes(16)
-
-    <<u0::48, 4::4, u1::12, 2::2, u2::62>>
-    |> Base.encode16(case: :lower)
-    |> String.replace(~r/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, "\\1-\\2-\\3-\\4-\\5")
   end
 
   defp count_fields(%{"fields" => fields}) when is_list(fields) do
