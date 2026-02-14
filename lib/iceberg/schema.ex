@@ -115,8 +115,15 @@ defmodule Iceberg.Schema do
     end
   end
 
-  defmacro __before_compile__(_env) do
+  defmacro __before_compile__(env) do
     quote do
+      # Compile-time validation
+      Iceberg.Schema.validate_schema!(
+        @iceberg_fields,
+        @iceberg_partition_spec,
+        unquote(env.module)
+      )
+
       def __table_path__, do: @iceberg_table_path
 
       def __schema__ do
@@ -159,6 +166,71 @@ defmodule Iceberg.Schema do
       end
     end
   end
+
+  @doc false
+  def validate_schema!(fields, partition_spec, module_name) do
+    reversed_fields = Enum.reverse(fields)
+
+    # Validate no duplicate field names
+    field_names = Enum.map(reversed_fields, fn {name, _type, _required, _doc} -> name end)
+    duplicates = field_names -- Enum.uniq(field_names)
+
+    if duplicates != [] do
+      raise CompileError,
+        description: "Duplicate field names in schema: #{inspect(Enum.uniq(duplicates))}",
+        file: "#{module_name}"
+    end
+
+    # Validate field types are valid
+    Enum.each(reversed_fields, fn {name, type, _required, _doc} ->
+      unless valid_iceberg_type?(type) do
+        raise CompileError,
+          description: "Invalid Iceberg type for field :#{name}: #{inspect(type)}",
+          file: "#{module_name}"
+      end
+    end)
+
+    # Validate partition field references existing field
+    if partition_spec do
+      {_transform, partition_field, _param} = partition_spec
+
+      field_exists? =
+        Enum.any?(reversed_fields, fn {name, _type, _required, _doc} ->
+          name == partition_field
+        end)
+
+      unless field_exists? do
+        raise CompileError,
+          description: "Partition field :#{partition_field} does not exist in schema",
+          file: "#{module_name}"
+      end
+    end
+
+    :ok
+  end
+
+  @doc false
+  defp valid_iceberg_type?(:string), do: true
+  defp valid_iceberg_type?(:long), do: true
+  defp valid_iceberg_type?(:int), do: true
+  defp valid_iceberg_type?(:double), do: true
+  defp valid_iceberg_type?(:float), do: true
+  defp valid_iceberg_type?(:boolean), do: true
+  defp valid_iceberg_type?(:timestamp), do: true
+  defp valid_iceberg_type?(:timestamptz), do: true
+  defp valid_iceberg_type?(:date), do: true
+  defp valid_iceberg_type?(:time), do: true
+  defp valid_iceberg_type?(:uuid), do: true
+  defp valid_iceberg_type?(:binary), do: true
+  defp valid_iceberg_type?({:decimal, _precision, _scale}), do: true
+  defp valid_iceberg_type?({:fixed, _length}), do: true
+  defp valid_iceberg_type?({:list, element_type}), do: valid_iceberg_type?(element_type)
+
+  defp valid_iceberg_type?({:map, key_type, value_type}),
+    do: valid_iceberg_type?(key_type) and valid_iceberg_type?(value_type)
+
+  defp valid_iceberg_type?({:struct, _fields}), do: true
+  defp valid_iceberg_type?(_), do: false
 
   @doc false
   def get_partition_field(nil), do: nil
