@@ -136,11 +136,11 @@ defmodule Iceberg.ParquetStats do
   # Extracts partition values from Hive-style partitioned paths
   # e.g., "s3://bucket/table/data/date=2024-01-15/file.parquet" -> %{"date" => "2024-01-15"}
   defp extract_partition_from_path(file_path) do
-    file_path
-    |> String.split("/")
-    |> Enum.filter(&String.contains?(&1, "="))
-    |> Enum.map(&String.split(&1, "=", parts: 2))
-    |> Enum.filter(&(length(&1) == 2))
-    |> Enum.into(%{}, fn [key, value] -> {key, value} end)
+    for segment <- String.split(file_path, "/"),
+        String.contains?(segment, "="),
+        [key, value] <- [String.split(segment, "=", parts: 2)],
+        into: %{} do
+      {key, value}
+    end
   end
 end
