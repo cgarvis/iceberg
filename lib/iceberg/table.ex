@@ -400,22 +400,26 @@ defmodule Iceberg.Table do
     compute = Iceberg.Config.compute_backend(opts)
     partition_by = opts[:partition_by] || []
 
-    partition_clause =
-      if Enum.empty?(partition_by) do
-        ""
-      else
-        "PARTITION_BY (#{Enum.join(partition_by, ", ")})"
+    data_path = Iceberg.Config.full_url("#{table_path}/data/", opts)
+
+    # Build partition option conditionally using pattern matching
+    partition_option =
+      case partition_by do
+        [] -> []
+        parts -> ["PARTITION_BY (#{Enum.join(parts, ", ")})"]
       end
 
-    data_path = Iceberg.Config.full_url("#{table_path}/data/", opts)
+    # Build all COPY options - use FILENAME_PATTERN with relative path
+    copy_options = ["FORMAT PARQUET"] ++ partition_option ++ ["FILENAME_PATTERN 'data-{uuid}'"]
 
     sql = """
     COPY (#{source_query})
     TO '#{data_path}'
-    (FORMAT PARQUET, #{partition_clause}, FILENAME_PATTERN 'data-{uuid}')
+    (#{Enum.join(copy_options, ", ")})
     """
 
     Logger.debug(fn -> "Writing data files with COPY: #{data_path}" end)
+    Logger.debug(fn -> "SQL: #{sql}" end)
 
     case compute.execute(conn, sql) do
       {:ok, _} ->

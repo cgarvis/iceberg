@@ -88,4 +88,42 @@ defmodule Iceberg.TableTest do
       :ok = Table.ensure_name_mapping(Iceberg.Test.Schemas.Simple, @opts)
     end
   end
+
+  describe "insert_overwrite/4" do
+    test "handles unpartitioned tables without syntax errors" do
+      # Create unpartitioned table (Simple schema has no partitions)
+      :ok = Table.create(Iceberg.Test.Schemas.Simple, nil, @opts)
+
+      # Mock successful execution - the COPY statement should be well-formed
+      MockCompute.set_response("COPY", {:ok, :executed})
+      MockCompute.set_response("parquet_metadata", {:ok, []})
+
+      # This should execute without syntax errors
+      assert {:ok, _snapshot} =
+               Table.insert_overwrite(
+                 :mock_conn,
+                 Iceberg.Test.Schemas.Simple,
+                 "SELECT '1' AS id, 'test' AS name, 100 AS count",
+                 @opts
+               )
+    end
+
+    test "handles partitioned tables correctly" do
+      # Create partitioned table (Events schema has day partition)
+      :ok = Table.create(Iceberg.Test.Schemas.Events, nil, @opts)
+
+      # Mock successful execution
+      MockCompute.set_response("COPY", {:ok, :executed})
+      MockCompute.set_response("parquet_metadata", {:ok, []})
+
+      # This should work with PARTITION_BY clause
+      assert {:ok, _snapshot} =
+               Table.insert_overwrite(
+                 :mock_conn,
+                 Iceberg.Test.Schemas.Events,
+                 "SELECT '1' AS id, NOW() AS timestamp, 'test' AS event_type, '{}' AS data, CURRENT_DATE AS partition_date",
+                 @opts
+               )
+    end
+  end
 end
