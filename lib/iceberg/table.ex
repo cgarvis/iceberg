@@ -86,19 +86,19 @@ defmodule Iceberg.Table do
 
   defp create_table_impl(table_path, iceberg_schema, partition_spec, opts) do
     if Metadata.exists?(table_path, opts) do
-      Logger.debug("Table already exists: #{table_path}")
+      Logger.debug(fn -> "Table already exists: #{table_path}" end)
       {:error, :already_exists}
     else
-      Logger.info("Creating Iceberg table: #{table_path}")
+      Logger.info(fn -> "Creating Iceberg table: #{table_path}" end)
 
       with {:ok, metadata} <-
              Metadata.create_initial(table_path, iceberg_schema, partition_spec, opts),
            :ok <- Metadata.save(table_path, metadata, opts) do
-        Logger.info("Created table: #{table_path}")
+        Logger.info(fn -> "Created table: #{table_path}" end)
         :ok
       else
         {:error, reason} = error ->
-          Logger.error("Failed to create table #{table_path}: #{inspect(reason)}")
+          Logger.error(fn -> "Failed to create table #{table_path}: #{inspect(reason)}" end)
           error
       end
     end
@@ -169,7 +169,7 @@ defmodule Iceberg.Table do
   end
 
   defp insert_overwrite_impl(conn, table_path, source_query, partition_spec, opts) do
-    Logger.info("Starting insert overwrite for table: #{table_path}")
+    Logger.info(fn -> "Starting insert overwrite for table: #{table_path}" end)
 
     with {:ok, metadata} <- Metadata.load(table_path, opts),
          :ok <- clear_data_directory(table_path, opts),
@@ -189,19 +189,19 @@ defmodule Iceberg.Table do
       with {:ok, snapshot} <- Snapshot.create(conn, table_path, data_pattern, snapshot_opts),
            {:ok, new_metadata} <- Metadata.add_snapshot(metadata, snapshot),
            :ok <- Metadata.save(table_path, new_metadata, opts) do
-        Logger.info(
+        Logger.info(fn ->
           "Insert overwrite complete for #{table_path}: snapshot #{snapshot["snapshot-id"]}"
-        )
+        end)
 
         {:ok, snapshot}
       else
         {:error, reason} = error ->
-          Logger.error("Snapshot creation failed for #{table_path}: #{inspect(reason)}")
+          Logger.error(fn -> "Snapshot creation failed for #{table_path}: #{inspect(reason)}" end)
           error
       end
     else
       {:error, reason} = error ->
-        Logger.error("Insert overwrite failed for #{table_path}: #{inspect(reason)}")
+        Logger.error(fn -> "Insert overwrite failed for #{table_path}: #{inspect(reason)}" end)
         error
     end
   end
@@ -262,11 +262,11 @@ defmodule Iceberg.Table do
         properties = metadata["properties"] || %{}
 
         if Map.has_key?(properties, "schema.name-mapping.default") do
-          Logger.debug("Name mapping already exists for #{table_path}")
+          Logger.debug(fn -> "Name mapping already exists for #{table_path}" end)
           :ok
         else
           name_mapping = build_name_mapping_json(schema)
-          Logger.info("Adding name mapping to #{table_path}")
+          Logger.info(fn -> "Adding name mapping to #{table_path}" end)
 
           Metadata.update_properties(
             table_path,
@@ -316,12 +316,15 @@ defmodule Iceberg.Table do
           {:ok, map()} | {:error, term()}
   def register_files(conn, table_path, file_pattern, opts \\ []) do
     storage = Iceberg.Config.storage_backend(opts)
-    Logger.info("Registering files for table: #{table_path} with pattern: #{file_pattern}")
+
+    Logger.info(fn ->
+      "Registering files for table: #{table_path} with pattern: #{file_pattern}"
+    end)
 
     matching_files = find_matching_files(storage, table_path, file_pattern)
 
     if matching_files == [] do
-      Logger.debug("No files matched pattern #{file_pattern}")
+      Logger.debug(fn -> "No files matched pattern #{file_pattern}" end)
       {:ok, nil}
     else
       register_matching_files(conn, table_path, file_pattern, matching_files, opts)
@@ -353,9 +356,9 @@ defmodule Iceberg.Table do
            Snapshot.create(conn, table_path, snapshot_opts[:data_url], snapshot_opts),
          {:ok, new_metadata} <- Metadata.add_snapshot(metadata, snapshot),
          :ok <- Metadata.save(table_path, new_metadata, opts) do
-      Logger.info(
+      Logger.info(fn ->
         "Registered #{length(matching_files)} files in #{table_path}: snapshot #{snapshot["snapshot-id"]}"
-      )
+      end)
 
       {:ok, snapshot}
     end
@@ -402,15 +405,15 @@ defmodule Iceberg.Table do
     (FORMAT PARQUET, #{partition_clause}, FILENAME_PATTERN 'data-{uuid}')
     """
 
-    Logger.debug("Writing data files with COPY: #{data_path}")
+    Logger.debug(fn -> "Writing data files with COPY: #{data_path}" end)
 
     case compute.execute(conn, sql) do
       {:ok, _} ->
-        Logger.info("Data files written successfully")
+        Logger.info(fn -> "Data files written successfully" end)
         :ok
 
       {:error, reason} ->
-        Logger.error("Failed to write data files: #{inspect(reason)}")
+        Logger.error(fn -> "Failed to write data files: #{inspect(reason)}" end)
         {:error, {:copy_failed, reason}}
     end
   end
@@ -425,7 +428,7 @@ defmodule Iceberg.Table do
 
       {:error, _reason} ->
         # If directory doesn't exist, that's fine
-        Logger.debug("No existing data directory to clear")
+        Logger.debug(fn -> "No existing data directory to clear" end)
         :ok
     end
   end
@@ -436,12 +439,12 @@ defmodule Iceberg.Table do
     errors = Enum.filter(results, &match?({:error, _}, &1))
 
     if Enum.empty?(errors) do
-      Logger.debug("Cleared #{length(files)} files from #{data_prefix}")
+      Logger.debug(fn -> "Cleared #{length(files)} files from #{data_prefix}" end)
       :ok
     else
-      Logger.warning(
+      Logger.warning(fn ->
         "Failed to delete #{length(errors)} of #{length(files)} files from #{data_prefix}"
-      )
+      end)
 
       # Still return :ok as partial cleanup is acceptable for overwrite operations
       # If this is a problem, change to {:error, {:partial_cleanup, errors}}

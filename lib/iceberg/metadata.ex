@@ -36,11 +36,11 @@ defmodule Iceberg.Metadata do
       {:ok, JSON.decode!(content)}
     else
       {:error, :not_found} = error ->
-        Logger.debug("Metadata not found for table: #{table_path}")
+        Logger.debug(fn -> "Metadata not found for table: #{table_path}" end)
         error
 
       {:error, reason} = error ->
-        Logger.error("Failed to load metadata for #{table_path}: #{inspect(reason)}")
+        Logger.error(fn -> "Failed to load metadata for #{table_path}: #{inspect(reason)}" end)
         error
     end
   end
@@ -186,11 +186,11 @@ defmodule Iceberg.Metadata do
 
     with :ok <- storage.upload(metadata_path, metadata_json, content_type: "application/json"),
          :ok <- update_version_hint(table_path, version, opts) do
-      Logger.info("Saved metadata version #{version} for table: #{table_path}")
+      Logger.info(fn -> "Saved metadata version #{version} for table: #{table_path}" end)
       :ok
     else
       {:error, reason} = error ->
-        Logger.error("Failed to save metadata for #{table_path}: #{inspect(reason)}")
+        Logger.error(fn -> "Failed to save metadata for #{table_path}: #{inspect(reason)}" end)
         error
     end
   end

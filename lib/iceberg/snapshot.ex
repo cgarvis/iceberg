@@ -43,7 +43,7 @@ defmodule Iceberg.Snapshot do
     table_schema = Keyword.get(opts, :table_schema)
     schema_id = Keyword.get(opts, :schema_id, 0)
 
-    Logger.info("Creating snapshot #{snapshot_id} for table: #{table_path}")
+    Logger.info(fn -> "Creating snapshot #{snapshot_id} for table: #{table_path}" end)
 
     manifest_opts = [table_schema: table_schema, schema_id: schema_id]
 
@@ -65,14 +65,14 @@ defmodule Iceberg.Snapshot do
           source_file
         )
 
-      Logger.info(
+      Logger.info(fn ->
         "Created snapshot #{snapshot_id}: #{length(stats)} files, #{total_records(stats)} records"
-      )
+      end)
 
       {:ok, snapshot}
     else
       {:error, reason} = error ->
-        Logger.error("Failed to create snapshot #{snapshot_id}: #{inspect(reason)}")
+        Logger.error(fn -> "Failed to create snapshot #{snapshot_id}: #{inspect(reason)}" end)
         error
     end
   end
@@ -100,7 +100,7 @@ defmodule Iceberg.Snapshot do
           added_rows_count: 0
         }
 
-        Logger.debug("Uploaded manifest: #{relative_path} (#{manifest_length} bytes)")
+        Logger.debug(fn -> "Uploaded manifest: #{relative_path} (#{manifest_length} bytes)" end)
         {:ok, metadata}
 
       {:error, reason} ->
@@ -116,7 +116,9 @@ defmodule Iceberg.Snapshot do
 
     case storage.upload(relative_path, avro_binary, content_type: "application/octet-stream") do
       :ok ->
-        Logger.debug("Uploaded manifest-list: #{relative_path} (#{byte_size(avro_binary)} bytes)")
+        Logger.debug(fn ->
+          "Uploaded manifest-list: #{relative_path} (#{byte_size(avro_binary)} bytes)"
+        end)
 
         {:ok, full_path}
 
