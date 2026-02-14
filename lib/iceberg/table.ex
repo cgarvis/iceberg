@@ -84,6 +84,7 @@ defmodule Iceberg.Table do
     create_table_impl(table_path, iceberg_schema, partition_spec, opts)
   end
 
+  @spec create_table_impl(String.t(), map(), map(), keyword()) :: :ok | {:error, term()}
   defp create_table_impl(table_path, iceberg_schema, partition_spec, opts) do
     if Metadata.exists?(table_path, opts) do
       Logger.debug(fn -> "Table already exists: #{table_path}" end)
@@ -168,6 +169,8 @@ defmodule Iceberg.Table do
     end
   end
 
+  @spec insert_overwrite_impl(term(), String.t(), String.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()}
   defp insert_overwrite_impl(conn, table_path, source_query, partition_spec, opts) do
     Logger.info(fn -> "Starting insert overwrite for table: #{table_path}" end)
 
@@ -256,6 +259,7 @@ defmodule Iceberg.Table do
     end
   end
 
+  @spec ensure_name_mapping_impl(String.t(), map(), keyword()) :: :ok | {:error, term()}
   defp ensure_name_mapping_impl(table_path, schema, opts) do
     case Metadata.load(table_path, opts) do
       {:ok, metadata} ->
@@ -280,6 +284,7 @@ defmodule Iceberg.Table do
     end
   end
 
+  @spec build_name_mapping_json(map()) :: String.t()
   defp build_name_mapping_json(%{"fields" => fields}) when is_list(fields) do
     mapping =
       Enum.map(fields, fn field ->
@@ -331,6 +336,7 @@ defmodule Iceberg.Table do
     end
   end
 
+  @spec find_matching_files(module(), String.t(), String.t()) :: list(String.t())
   defp find_matching_files(storage, table_path, file_pattern) do
     # Extract the prefix from the pattern (before any wildcard)
     file_prefix =
@@ -349,6 +355,8 @@ defmodule Iceberg.Table do
     end)
   end
 
+  @spec register_matching_files(term(), String.t(), String.t(), list(String.t()), keyword()) ::
+          {:ok, map()} | {:error, term()}
   defp register_matching_files(conn, table_path, file_pattern, matching_files, opts) do
     with {:ok, metadata} <- Metadata.load(table_path, opts),
          snapshot_opts <- build_snapshot_opts(metadata, file_pattern, opts),
@@ -364,6 +372,7 @@ defmodule Iceberg.Table do
     end
   end
 
+  @spec build_snapshot_opts(map(), String.t(), keyword()) :: keyword()
   defp build_snapshot_opts(metadata, file_pattern, opts) do
     partition_spec = List.first(metadata["partition-specs"]) || %{"spec-id" => 0, "fields" => []}
     sequence_number = (metadata["last-sequence-number"] || 0) + 1
@@ -386,6 +395,7 @@ defmodule Iceberg.Table do
 
   ## Private Functions
 
+  @spec write_data_files(term(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   defp write_data_files(conn, table_path, source_query, opts) do
     compute = Iceberg.Config.compute_backend(opts)
     partition_by = opts[:partition_by] || []
@@ -418,6 +428,7 @@ defmodule Iceberg.Table do
     end
   end
 
+  @spec clear_data_directory(String.t(), keyword()) :: :ok
   defp clear_data_directory(table_path, opts) do
     storage = Iceberg.Config.storage_backend(opts)
     data_prefix = "#{table_path}/data/"
@@ -433,6 +444,7 @@ defmodule Iceberg.Table do
     end
   end
 
+  @spec delete_files_with_error_tracking(list(String.t()), module(), String.t()) :: :ok
   defp delete_files_with_error_tracking(files, storage, data_prefix) do
     # Delete all data files and collect results
     results = Enum.map(files, &safe_delete(storage, &1))
@@ -452,6 +464,7 @@ defmodule Iceberg.Table do
     end
   end
 
+  @spec safe_delete(module(), String.t()) :: :ok | {:error, term()}
   defp safe_delete(storage, file) do
     case storage.delete(file) do
       :ok -> :ok
@@ -460,6 +473,7 @@ defmodule Iceberg.Table do
   end
 
   # Converts legacy tuple-based schema to Iceberg schema format
+  @spec convert_legacy_schema(list(tuple())) :: map()
   defp convert_legacy_schema(schema) do
     fields =
       Enum.with_index(schema, fn {name, type, required}, idx ->
@@ -478,6 +492,7 @@ defmodule Iceberg.Table do
     }
   end
 
+  @spec normalize_type(String.t() | atom()) :: String.t()
   defp normalize_type(type) when is_binary(type), do: String.downcase(type)
   defp normalize_type(type) when is_atom(type), do: to_string(type) |> String.downcase()
 end
