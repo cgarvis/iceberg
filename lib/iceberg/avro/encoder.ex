@@ -102,6 +102,8 @@ defmodule Iceberg.Avro.Encoder do
   end
 
   # Encodes all data blocks
+  # Recursively encodes data blocks with accumulator
+  @dialyzer {:nowarn_function, encode_data_blocks: 4}
   defp encode_data_blocks(records, schema, sync_marker, block_size) do
     records
     |> Enum.chunk_every(block_size)
@@ -132,6 +134,8 @@ defmodule Iceberg.Avro.Encoder do
   end
 
   # Encodes a value according to its type
+  # Multiple clauses intentionally handle different type patterns
+  @dialyzer {:nowarn_function, encode_value: 2}
   defp encode_value(nil, ["null" | _rest]), do: encode_long(0)
 
   defp encode_value(value, ["null", actual_type]),
@@ -216,6 +220,8 @@ defmodule Iceberg.Avro.Encoder do
   end
 
   # Ensure key is an integer if it came in as a string
+  # Normalize map keys - handles both string and integer keys
+  @dialyzer {:nowarn_function, normalize_map_key: 1}
   defp normalize_map_key(k) when is_binary(k), do: String.to_integer(k)
   defp normalize_map_key(k), do: k
 
