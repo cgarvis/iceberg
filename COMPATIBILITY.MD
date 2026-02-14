@@ -4,6 +4,32 @@ This document tracks the implementation status of this Elixir library against th
 
 **Current Target:** Apache Iceberg v2
 
+## Verified Integrations
+
+### ✅ DuckDB (Fully Compatible)
+
+Tables created by this library can be queried using DuckDB's [`iceberg_scan()`](https://duckdb.org/docs/extensions/iceberg.html) function.
+
+```sql
+INSTALL iceberg;
+LOAD iceberg;
+SELECT * FROM iceberg_scan('path/to/metadata/v1.metadata.json');
+```
+
+**Tested with:** DuckDB v1.1+  
+**Integration test:** `test/integration/duckdb_test.exs`
+
+### Expected Compatibility
+
+Based on Iceberg v2 specification compliance, tables should work with:
+- Apache Spark (iceberg-spark runtime)
+- Trino/Presto (Iceberg connector)
+- Apache Flink (Iceberg connector)
+- AWS Athena (Iceberg table format)
+- PyIceberg (Python library)
+
+*Not yet explicitly tested. Contributions welcome!*
+
 ## Legend
 - ✅ Implemented and tested
 - 🟡 Partially implemented
@@ -359,33 +385,42 @@ All core V1 features have been implemented:
 **Known Limitations:**
 - Schema evolution (add/drop/rename columns) - Not yet implemented
 - Read operations - Delegated to external query engines (DuckDB, Spark, Trino)
-- DuckDB compatibility - Partial (see below)
 
 ### DuckDB Integration Status
 
-**Status:** ⚠️ **Partial Compatibility**
+**Status:** ✅ **Fully Compatible**
 
 - ✅ Table creation works
 - ✅ Metadata generation works
 - ✅ Snapshots and manifests created
-- ⚠️ DuckDB `iceberg_scan` fails with Avro encoding compatibility issue
+- ✅ DuckDB `iceberg_scan()` successfully reads tables
 
-**Issue:** DuckDB's strict Avro parser expects specific byte encoding of bounds that differs slightly from our pure Elixir Avro encoder. This is a serialization format issue, not a logical correctness issue.
+**Tested with:** DuckDB v1.1+
 
-**Workaround Options:**
-1. Use Spark or Trino for reading (may be more lenient)
-2. Use DuckDB for both writing and reading
-3. Future: Investigate Avro encoder byte-level compatibility
+**Integration test:** `test/integration/duckdb_test.exs`
+
+**Example Usage:**
+```sql
+-- Install and load the iceberg extension
+INSTALL iceberg;
+LOAD iceberg;
+
+-- Query an Iceberg table
+SELECT * FROM iceberg_scan('path/to/metadata/v1.metadata.json');
+```
 
 **What Works:**
 - All internal operations (create, snapshot, metadata)
-- 139 tests passing (123 core + 16 encoding tests)
+- 123 tests passing (all core functionality)
+- Full Avro encoding compatibility with DuckDB
 - Type system fully compliant with V1 spec
 - Proper binary encoding of all primitive types
+- DuckDB can query tables created by this library
 
 ---
 
 **Last Updated:** 2026-02-14  
 **Library Version:** 0.1.0  
 **Primary Target:** Apache Iceberg v2  
-**V1 Status:** ✅ Complete
+**V1 Status:** ✅ Complete  
+**DuckDB Compatibility:** ✅ Verified
