@@ -74,23 +74,19 @@ defmodule Iceberg.ParquetStats do
     ORDER BY file_name
     """
 
-    case compute.query(conn, sql) do
-      {:ok, results} ->
-        # Convert results to manifest-friendly format
-        stats =
-          Enum.map(results, fn row ->
-            %{
-              file_path: row["file_path"],
-              file_size_in_bytes: to_integer(row["file_size_in_bytes"]),
-              record_count: to_integer(row["record_count"]),
-              partition_values: extract_partition_from_path(row["file_path"])
-            }
-          end)
+    with {:ok, results} <- compute.query(conn, sql) do
+      # Convert results to manifest-friendly format
+      stats =
+        Enum.map(results, fn row ->
+          %{
+            file_path: row["file_path"],
+            file_size_in_bytes: to_integer(row["file_size_in_bytes"]),
+            record_count: to_integer(row["record_count"]),
+            partition_values: extract_partition_from_path(row["file_path"])
+          }
+        end)
 
-        {:ok, stats}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, stats}
     end
   end
 

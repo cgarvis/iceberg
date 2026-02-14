@@ -438,13 +438,14 @@ defmodule Iceberg.Manifest do
   defp convert_partition_value(value, _transform, _partition_data), do: value
 
   defp get_int_value(map, key) do
-    case Map.get(map, key) || Map.get(map, String.to_atom(key)) do
-      nil -> nil
-      val when is_integer(val) -> val
-      val when is_binary(val) -> String.to_integer(val)
-      _ -> nil
-    end
+    value = Map.get(map, key) || Map.get(map, String.to_atom(key))
+    parse_int_value(value)
   end
+
+  defp parse_int_value(nil), do: nil
+  defp parse_int_value(val) when is_integer(val), do: val
+  defp parse_int_value(val) when is_binary(val), do: String.to_integer(val)
+  defp parse_int_value(_), do: nil
 
   # Maps Iceberg types to Avro types
   defp avro_type("string"), do: "string"

@@ -207,10 +207,7 @@ defmodule Iceberg.Metadata do
   """
   @spec exists?(String.t(), keyword()) :: boolean()
   def exists?(table_path, opts \\ []) do
-    case read_version_hint(table_path, opts) do
-      {:ok, _version} -> true
-      {:error, _} -> false
-    end
+    match?({:ok, _version}, read_version_hint(table_path, opts))
   end
 
   @doc """
@@ -229,10 +226,11 @@ defmodule Iceberg.Metadata do
   @spec get_last_processed_file(String.t(), keyword()) ::
           {:ok, String.t() | nil} | {:error, term()}
   def get_last_processed_file(table_path, opts \\ []) do
-    case load(table_path, opts) do
-      {:ok, metadata} -> {:ok, extract_source_file(metadata)}
+    with {:ok, metadata} <- load(table_path, opts) do
+      {:ok, extract_source_file(metadata)}
+    else
       {:error, :not_found} -> {:ok, nil}
-      {:error, reason} -> {:error, reason}
+      error -> error
     end
   end
 

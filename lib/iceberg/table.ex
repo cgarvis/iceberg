@@ -466,10 +466,7 @@ defmodule Iceberg.Table do
 
   @spec safe_delete(module(), String.t()) :: :ok | {:error, term()}
   defp safe_delete(storage, file) do
-    case storage.delete(file) do
-      :ok -> :ok
-      {:error, _} = error -> error
-    end
+    storage.delete(file)
   end
 
   # Converts legacy tuple-based schema to Iceberg schema format
