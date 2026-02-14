@@ -42,8 +42,14 @@ defmodule Iceberg.MixProject do
   defp package do
     [
       name: "iceberg",
+      description:
+        "Apache Iceberg v2 table format implementation in pure Elixir with zero runtime dependencies",
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => @source_url}
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
+      },
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md)
     ]
   end
 
