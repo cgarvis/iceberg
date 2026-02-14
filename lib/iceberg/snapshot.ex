@@ -11,7 +11,7 @@ defmodule Iceberg.Snapshot do
   6. Return snapshot metadata
   """
 
-  alias Iceberg.{Manifest, ManifestList, ParquetStats, UUID}
+  alias Iceberg.{Error, Manifest, ManifestList, ParquetStats, UUID}
   require Logger
 
   @doc """
@@ -104,7 +104,7 @@ defmodule Iceberg.Snapshot do
         {:ok, metadata}
 
       {:error, reason} ->
-        {:error, {:manifest_upload_failed, reason}}
+        Error.manifest_upload_failed(reason)
     end
   end
 
@@ -123,7 +123,7 @@ defmodule Iceberg.Snapshot do
         {:ok, full_path}
 
       {:error, reason} ->
-        {:error, {:manifest_list_upload_failed, reason}}
+        Error.manifest_list_upload_failed(reason)
     end
   end
 

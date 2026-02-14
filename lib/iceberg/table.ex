@@ -45,7 +45,7 @@ defmodule Iceberg.Table do
   - Inconsistent metadata state
   """
 
-  alias Iceberg.{Metadata, Snapshot}
+  alias Iceberg.{Error, Metadata, Snapshot}
   require Logger
 
   @doc """
@@ -88,7 +88,7 @@ defmodule Iceberg.Table do
   defp create_table_impl(table_path, iceberg_schema, partition_spec, opts) do
     if Metadata.exists?(table_path, opts) do
       Logger.debug(fn -> "Table already exists: #{table_path}" end)
-      {:error, :already_exists}
+      Error.table_exists()
     else
       Logger.info(fn -> "Creating Iceberg table: #{table_path}" end)
 
@@ -424,7 +424,7 @@ defmodule Iceberg.Table do
 
       {:error, reason} ->
         Logger.error(fn -> "Failed to write data files: #{inspect(reason)}" end)
-        {:error, {:copy_failed, reason}}
+        Error.copy_failed(reason)
     end
   end
 

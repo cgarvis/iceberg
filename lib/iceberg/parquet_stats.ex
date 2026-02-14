@@ -6,6 +6,8 @@ defmodule Iceberg.ParquetStats do
   proper file metadata for partition pruning and query optimization.
   """
 
+  alias Iceberg.Error
+
   @doc """
   Extracts metadata from Parquet files needed for manifest creation.
 
@@ -43,11 +45,11 @@ defmodule Iceberg.ParquetStats do
     if String.match?(pattern, ~r/^[a-zA-Z0-9\/\*\.\-_:]+$/) do
       :ok
     else
-      {:error, {:invalid_file_pattern, "Pattern contains unsafe characters: #{pattern}"}}
+      Error.invalid_file_pattern("Pattern contains unsafe characters: #{pattern}")
     end
   end
 
-  defp validate_file_pattern(_), do: {:error, {:invalid_file_pattern, "Pattern must be a string"}}
+  defp validate_file_pattern(_), do: Error.invalid_file_pattern("Pattern must be a string")
 
   defp execute_stats_query(conn, file_pattern, opts) do
     compute = Iceberg.Config.compute_backend(opts)
