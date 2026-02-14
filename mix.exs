@@ -1,0 +1,53 @@
+defmodule Iceberg.MixProject do
+  use Mix.Project
+
+  @version "0.1.0"
+  @source_url "https://github.com/cgarvis/iceberg"
+
+  def project do
+    [
+      app: :iceberg,
+      version: @version,
+      elixir: "~> 1.18",
+      start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
+      deps: deps(),
+      package: package(),
+      name: "Iceberg",
+      description: "Apache Iceberg v2 table format implementation in pure Elixir",
+      source_url: @source_url,
+      docs: docs()
+    ]
+  end
+
+  def application do
+    [
+      extra_applications: [:logger, :crypto]
+    ]
+  end
+
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
+  defp deps do
+    [
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false}
+    ]
+  end
+
+  defp package do
+    [
+      name: "iceberg",
+      licenses: ["Apache-2.0"],
+      links: %{"GitHub" => @source_url}
+    ]
+  end
+
+  defp docs do
+    [
+      main: "Iceberg",
+      source_ref: "v#{@version}",
+      source_url: @source_url
+    ]
+  end
+end
