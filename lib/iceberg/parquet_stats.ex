@@ -130,6 +130,13 @@ defmodule Iceberg.ParquetStats do
   defp to_integer(f) when is_float(f), do: round(f)
   defp to_integer(s) when is_binary(s), do: String.to_integer(s)
   defp to_integer(nil), do: 0
+  # Handle Decimal structs (check if it's a struct with __struct__: Decimal)
+  defp to_integer(d) when is_map(d) do
+    case Map.get(d, :__struct__) do
+      Decimal -> d |> Decimal.to_integer()
+      _ -> raise ArgumentError, "Cannot convert #{inspect(d)} to integer"
+    end
+  end
 
   # Extracts partition values from Hive-style partitioned paths
   # e.g., "s3://bucket/table/data/date=2024-01-15/file.parquet" -> %{"date" => "2024-01-15"}
