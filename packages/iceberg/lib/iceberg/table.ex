@@ -601,7 +601,9 @@ defmodule Iceberg.Table do
   @spec write_data_files(term(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   defp write_data_files(conn, table_path, source_query, opts) do
     compute = Iceberg.Config.compute_backend(opts)
-    data_path = Iceberg.Config.full_url("#{table_path}/data/", opts)
+
+    # Never use trailing slash - let DuckDB handle path construction for both partitioned and unpartitioned tables
+    data_path = Iceberg.Config.full_url("#{table_path}/data", opts)
 
     Logger.debug(fn -> "Writing data files to: #{data_path}" end)
 
