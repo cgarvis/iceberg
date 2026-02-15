@@ -45,7 +45,7 @@ defmodule Iceberg.Table do
   - Inconsistent metadata state
   """
 
-  alias Iceberg.{Error, Metadata, Snapshot}
+  alias Iceberg.{Error, Metadata, Snapshot, SchemaEvolution}
   require Logger
 
   @doc """
@@ -300,6 +300,209 @@ defmodule Iceberg.Table do
   defp build_name_mapping_json(_schema), do: "[]"
 
   @doc """
+  Evolves a table's schema by applying a schema evolution operation.
+
+  ## Parameters
+    - schema_module_or_path: Schema module or table path string
+    - evolution_fn: Function that takes (current_schema, context) and returns evolved schema
+      Example: `fn schema, ctx -> SchemaEvolution.add_column(schema, %{name: "email", type: "string"}, ctx) end`
+    - opts: Options
+      - `:mode` - Validation mode (:strict, :permissive, :none)
+      - `:force` - Skip validation (same as mode: :none)
+      - `:table_empty?` - Whether table has data (default: false)
+
+  ## Returns
+    `:ok` - Schema evolved successfully
+    `{:ok, warnings}` - Success with warnings (permissive mode)
+    `{:error, reason}` - Evolution failed
+
+  ## Examples
+
+      # Add a column
+      Table.evolve_schema("canonical/events", fn schema, ctx ->
+        SchemaEvolution.add_column(schema, %{name: "email", type: "string"}, ctx)
+      end)
+
+      # Rename a column
+      Table.evolve_schema(MySchema, fn schema, _ctx ->
+        SchemaEvolution.rename_column(schema, "old_name", "new_name")
+      end)
+  """
+  @spec evolve_schema(module() | String.t(), function(), keyword()) ::
+          :ok | {:ok, String.t()} | {:error, term()}
+  def evolve_schema(schema_module_or_path, evolution_fn, opts \\ [])
+
+  def evolve_schema(schema_module, evolution_fn, opts) when is_atom(schema_module) do
+    table_path = schema_module.__table_path__()
+    evolve_schema_impl(table_path, evolution_fn, opts)
+  end
+
+  def evolve_schema(table_path, evolution_fn, opts) when is_binary(table_path) do
+    evolve_schema_impl(table_path, evolution_fn, opts)
+  end
+
+  @spec evolve_schema_impl(String.t(), function(), keyword()) ::
+          :ok | {:ok, String.t()} | {:error, term()}
+  defp evolve_schema_impl(table_path, evolution_fn, opts) do
+    Logger.info(fn -> "Evolving schema for table: #{table_path}" end)
+
+    case Metadata.evolve_schema(table_path, evolution_fn, opts) do
+      {:ok, updated_metadata} ->
+        :ok = Metadata.save(table_path, updated_metadata, opts)
+        Logger.info(fn -> "Schema evolution complete for #{table_path}" end)
+        :ok
+
+      {:ok, updated_metadata, warnings} ->
+        :ok = Metadata.save(table_path, updated_metadata, opts)
+
+        Logger.warning(fn ->
+          "Schema evolution complete for #{table_path} with warnings: #{warnings}"
+        end)
+
+        {:ok, warnings}
+
+      {:error, reason} = error ->
+        Logger.error(fn -> "Schema evolution failed for #{table_path}: #{inspect(reason)}" end)
+        error
+    end
+  end
+
+  @doc """
+  Adds a new column to a table's schema.
+
+  Convenience wrapper around evolve_schema for adding columns.
+
+  ## Parameters
+    - schema_module_or_path: Schema module or table path string
+    - field_spec: Field specification map with keys:
+      - `:name` (required) - Column name
+      - `:type` (required) - Column type
+      - `:required` (optional) - Whether field is required (default: false)
+      - `:doc` (optional) - Documentation string
+    - opts: Options (same as evolve_schema)
+
+  ## Returns
+    `:ok` - Column added successfully
+    `{:ok, warnings}` - Success with warnings (permissive mode)
+    `{:error, reason}` - Operation failed
+
+  ## Examples
+
+      Table.add_column("canonical/events", %{name: "email", type: "string"})
+      Table.add_column(MySchema, %{name: "count", type: "long", required: false})
+  """
+  @spec add_column(module() | String.t(), map(), keyword()) ::
+          :ok | {:ok, String.t()} | {:error, term()}
+  def add_column(schema_module_or_path, field_spec, opts \\ []) do
+    evolve_schema(
+      schema_module_or_path,
+      fn schema, ctx ->
+        SchemaEvolution.add_column(schema, field_spec, ctx)
+      end,
+      opts
+    )
+  end
+
+  @doc """
+  Drops a column from a table's schema.
+
+  Note: Field IDs are never reused. The dropped field ID is permanently reserved.
+
+  ## Parameters
+    - schema_module_or_path: Schema module or table path string
+    - field_name: Name of column to drop
+    - opts: Options (same as evolve_schema)
+
+  ## Returns
+    `:ok` - Column dropped successfully
+    `{:ok, warnings}` - Success with warnings (permissive mode)
+    `{:error, reason}` - Operation failed
+
+  ## Examples
+
+      Table.drop_column("canonical/events", "old_field")
+      Table.drop_column(MySchema, "temp_column", mode: :permissive)
+  """
+  @spec drop_column(module() | String.t(), String.t(), keyword()) ::
+          :ok | {:ok, String.t()} | {:error, term()}
+  def drop_column(schema_module_or_path, field_name, opts \\ []) do
+    evolve_schema(
+      schema_module_or_path,
+      fn schema, _ctx ->
+        SchemaEvolution.drop_column(schema, field_name, opts)
+      end,
+      opts
+    )
+  end
+
+  @doc """
+  Renames a column in a table's schema.
+
+  Field ID and type are preserved. Only the name changes.
+
+  ## Parameters
+    - schema_module_or_path: Schema module or table path string
+    - old_name: Current column name
+    - new_name: New column name
+    - opts: Options (same as evolve_schema)
+
+  ## Returns
+    `:ok` - Column renamed successfully
+    `{:error, reason}` - Operation failed
+
+  ## Examples
+
+      Table.rename_column("canonical/events", "old_name", "new_name")
+      Table.rename_column(MySchema, "temp", "temporary")
+  """
+  @spec rename_column(module() | String.t(), String.t(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def rename_column(schema_module_or_path, old_name, new_name, opts \\ []) do
+    evolve_schema(
+      schema_module_or_path,
+      fn schema, _ctx ->
+        SchemaEvolution.rename_column(schema, old_name, new_name, opts)
+      end,
+      opts
+    )
+  end
+
+  @doc """
+  Updates a column's type (safe promotions only).
+
+  ## Safe Type Promotions
+  - int → long
+  - float → double
+
+  ## Parameters
+    - schema_module_or_path: Schema module or table path string
+    - field_name: Name of column to update
+    - new_type: New type for the column
+    - opts: Options (same as evolve_schema)
+
+  ## Returns
+    `:ok` - Type updated successfully
+    `{:ok, warnings}` - Success with warnings (permissive mode)
+    `{:error, reason}` - Operation failed
+
+  ## Examples
+
+      Table.update_column_type("canonical/events", "count", "long")
+      Table.update_column_type(MySchema, "value", "double")
+  """
+  @spec update_column_type(module() | String.t(), String.t(), term(), keyword()) ::
+          :ok | {:ok, String.t()} | {:error, term()}
+  def update_column_type(schema_module_or_path, field_name, new_type, opts \\ []) do
+    evolve_schema(
+      schema_module_or_path,
+      fn schema, _ctx ->
+        SchemaEvolution.update_column_type(schema, field_name, new_type, opts)
+      end,
+      opts
+    )
+  end
+
+  @doc """
   Registers externally-written Parquet files into an Iceberg table.
 
   Used when files are written outside this library.
@@ -398,30 +601,11 @@ defmodule Iceberg.Table do
   @spec write_data_files(term(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   defp write_data_files(conn, table_path, source_query, opts) do
     compute = Iceberg.Config.compute_backend(opts)
-    partition_by = opts[:partition_by] || []
-
     data_path = Iceberg.Config.full_url("#{table_path}/data/", opts)
 
-    # Build partition option conditionally using pattern matching
-    partition_option =
-      case partition_by do
-        [] -> []
-        parts -> ["PARTITION_BY (#{Enum.join(parts, ", ")})"]
-      end
+    Logger.debug(fn -> "Writing data files to: #{data_path}" end)
 
-    # Build all COPY options - use FILENAME_PATTERN with relative path
-    copy_options = ["FORMAT PARQUET"] ++ partition_option ++ ["FILENAME_PATTERN 'data-{uuid}'"]
-
-    sql = """
-    COPY (#{source_query})
-    TO '#{data_path}'
-    (#{Enum.join(copy_options, ", ")})
-    """
-
-    Logger.debug(fn -> "Writing data files with COPY: #{data_path}" end)
-    Logger.debug(fn -> "SQL: #{sql}" end)
-
-    case compute.execute(conn, sql) do
+    case compute.write_data_files(conn, source_query, data_path, opts) do
       {:ok, _} ->
         Logger.info(fn -> "Data files written successfully" end)
         :ok
