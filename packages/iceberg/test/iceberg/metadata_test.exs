@@ -2,7 +2,6 @@ defmodule Iceberg.MetadataTest do
   use ExUnit.Case
 
   alias Iceberg.Metadata
-  alias Iceberg.SchemaEvolution
   alias Iceberg.Storage.Memory
 
   @opts [storage: Memory, base_url: "memory://test"]

@@ -55,6 +55,22 @@ defmodule Iceberg.Test.MockCompute do
     end
   end
 
+  @impl true
+  def write_data_files(conn, source_query, dest_path, opts) do
+    # For mock purposes, just build a simple COPY statement and execute it
+    # This allows tests to mock the COPY command if needed
+    partition_by = opts[:partition_by] || []
+
+    partition_clause =
+      case partition_by do
+        [] -> ""
+        parts -> ", PARTITION_BY (#{Enum.join(parts, ", ")})"
+      end
+
+    sql = "COPY (#{source_query}) TO '#{dest_path}' (FORMAT PARQUET#{partition_clause})"
+    execute(conn, sql)
+  end
+
   defp find_matching_response(responses, sql) do
     Enum.find_value(responses, fn {pattern, response} ->
       if String.contains?(sql, pattern), do: response

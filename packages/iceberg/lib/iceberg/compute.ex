@@ -68,4 +68,35 @@ defmodule Iceberg.Compute do
       # => {:ok, %{rows_written: 1000}}
   """
   @callback execute(connection, sql) :: {:ok, result} | {:error, error}
+
+  @doc """
+  Writes data files from a source query to a destination path in Parquet format.
+
+  This is a higher-level operation that abstracts database-specific syntax for
+  writing Parquet files with partitioning support.
+
+  ## Parameters
+    - connection: Backend-specific connection
+    - source_query: SQL SELECT query to use as the data source
+    - dest_path: Destination path/URL for writing files (e.g., "s3://bucket/table/data/")
+    - opts: Options including:
+      - `:partition_by` - List of column names to partition by (default: [])
+      - Additional backend-specific options
+
+  ## Returns
+    - `{:ok, result}` on success
+    - `{:error, reason}` on failure
+
+  ## Example
+
+      write_data_files(conn, "SELECT * FROM staging", "s3://bucket/data/", partition_by: ["date"])
+      # => {:ok, :written}
+  """
+  @callback write_data_files(
+              connection,
+              source_query :: sql,
+              dest_path :: String.t(),
+              opts :: keyword()
+            ) ::
+              {:ok, result} | {:error, error}
 end

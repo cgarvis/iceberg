@@ -368,8 +368,10 @@ defmodule Iceberg.Metadata do
     max_field_id = get_max_field_id(evolved_schema)
     new_last_column_id = max(current_last_column_id, max_field_id)
 
-    # Rebuild name mapping with new schema
-    name_mapping = build_name_mapping(evolved_schema_with_id)
+    # Build name mapping that includes historical names from all schemas
+    # This allows DuckDB and other engines to read old Parquet files with renamed columns
+    all_schemas = (metadata["schemas"] || []) ++ [evolved_schema_with_id]
+    name_mapping = build_name_mapping_with_history(all_schemas)
 
     metadata
     |> Map.put("current-schema-id", next_schema_id)
@@ -470,4 +472,46 @@ defmodule Iceberg.Metadata do
   end
 
   defp build_name_mapping(_schema), do: "[]"
+
+  # Builds name mapping with historical names from all schemas
+  # This allows engines to read old Parquet files after column renames
+  defp build_name_mapping_with_history(schemas) do
+    # Group all field names by field ID across all schemas
+    field_names_by_id = collect_field_names_by_id(schemas)
+
+    # Build mapping with all historical names for each field
+    mapping =
+      field_names_by_id
+      |> Enum.map(fn {field_id, names} ->
+        %{
+          "field-id" => field_id,
+          "names" => names
+        }
+      end)
+      |> Enum.sort_by(& &1["field-id"])
+
+    JSON.encode!(mapping)
+  end
+
+  # Collects all field names by field ID across all schema versions
+  defp collect_field_names_by_id(schemas) do
+    Enum.reduce(schemas, %{}, fn schema, acc ->
+      fields = schema["fields"] || []
+      Enum.reduce(fields, acc, &add_field_name_to_mapping/2)
+    end)
+  end
+
+  # Adds a field name to the mapping, avoiding duplicates
+  defp add_field_name_to_mapping(field, acc) do
+    field_id = field["id"]
+    field_name = field["name"]
+
+    Map.update(acc, field_id, [field_name], fn existing_names ->
+      if field_name in existing_names do
+        existing_names
+      else
+        existing_names ++ [field_name]
+      end
+    end)
+  end
 end

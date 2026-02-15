@@ -7,6 +7,7 @@ defmodule Iceberg.ParquetStats do
   """
 
   alias Iceberg.Error
+  require Logger
 
   @doc """
   Extracts metadata from Parquet files needed for manifest creation.
@@ -74,19 +75,32 @@ defmodule Iceberg.ParquetStats do
     ORDER BY file_name
     """
 
-    with {:ok, results} <- compute.query(conn, sql) do
-      # Convert results to manifest-friendly format
-      stats =
-        Enum.map(results, fn row ->
-          %{
-            file_path: row["file_path"],
-            file_size_in_bytes: to_integer(row["file_size_in_bytes"]),
-            record_count: to_integer(row["record_count"]),
-            partition_values: extract_partition_from_path(row["file_path"])
-          }
-        end)
+    case compute.query(conn, sql) do
+      {:ok, results} ->
+        # Convert results to manifest-friendly format
+        stats =
+          Enum.map(results, fn row ->
+            %{
+              file_path: row["file_path"],
+              file_size_in_bytes: to_integer(row["file_size_in_bytes"]),
+              record_count: to_integer(row["record_count"]),
+              partition_values: extract_partition_from_path(row["file_path"])
+            }
+          end)
 
-      {:ok, stats}
+        {:ok, stats}
+
+      {:error, %{message: message}} when is_binary(message) ->
+        # Handle "No files found" error - return empty stats
+        if String.contains?(message, "No files found") do
+          Logger.debug(fn -> "No parquet files found for pattern: #{file_pattern}" end)
+          {:ok, []}
+        else
+          {:error, message}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -133,8 +147,17 @@ defmodule Iceberg.ParquetStats do
   # Handle Decimal structs (check if it's a struct with __struct__: Decimal)
   defp to_integer(d) when is_map(d) do
     case Map.get(d, :__struct__) do
-      Decimal -> d |> Decimal.to_integer()
-      _ -> raise ArgumentError, "Cannot convert #{inspect(d)} to integer"
+      mod when is_atom(mod) ->
+        # Use runtime check for Decimal module to avoid compile-time warning
+        if mod |> Atom.to_string() |> String.ends_with?("Decimal") do
+          # Call Decimal.to_integer/1 dynamically to avoid compile-time dependency
+          apply(mod, :to_integer, [d])
+        else
+          raise ArgumentError, "Cannot convert #{inspect(d)} to integer"
+        end
+
+      _ ->
+        raise ArgumentError, "Cannot convert #{inspect(d)} to integer"
     end
   end
 

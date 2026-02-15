@@ -30,6 +30,37 @@ defmodule Iceberg.Test.DuckDBCompute do
     end
   end
 
+  @impl true
+  def write_data_files(conn, source_query, dest_path, opts) do
+    partition_by = opts[:partition_by] || []
+
+    partition_option =
+      case partition_by do
+        [] -> []
+        parts -> ["PARTITION_BY (#{Enum.join(parts, ", ")})"]
+      end
+
+    per_thread_option =
+      case partition_by do
+        [] -> ["PER_THREAD_OUTPUT true"]
+        _ -> []
+      end
+
+    copy_options =
+      ["FORMAT PARQUET"] ++
+        partition_option ++
+        per_thread_option ++
+        ["OVERWRITE_OR_IGNORE true", "FILENAME_PATTERN 'data-{uuid}'"]
+
+    sql = """
+    COPY (#{source_query})
+    TO '#{dest_path}'
+    (#{Enum.join(copy_options, ", ")})
+    """
+
+    execute(conn, sql)
+  end
+
   defp run_duckdb(conn, sql) do
     db_path = if conn == :memory, do: ":memory:", else: conn
 
