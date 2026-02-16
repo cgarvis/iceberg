@@ -54,7 +54,7 @@ defmodule Iceberg.Storage.Memory do
   end
 
   @impl true
-  def download(path) do
+  def download(path, _opts) do
     case Agent.get(__MODULE__, &Map.get(&1, path)) do
       nil -> {:error, :not_found}
       content -> {:ok, content}
@@ -62,7 +62,7 @@ defmodule Iceberg.Storage.Memory do
   end
 
   @impl true
-  def list(prefix) do
+  def list(prefix, _opts) do
     Agent.get(__MODULE__, fn state ->
       state
       |> Map.keys()
@@ -71,13 +71,13 @@ defmodule Iceberg.Storage.Memory do
   end
 
   @impl true
-  def delete(path) do
+  def delete(path, _opts) do
     Agent.update(__MODULE__, &Map.delete(&1, path))
     :ok
   end
 
   @impl true
-  def exists?(path) do
+  def exists?(path, _opts) do
     Agent.get(__MODULE__, &Map.has_key?(&1, path))
   end
 end

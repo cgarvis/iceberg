@@ -32,7 +32,8 @@ defmodule Iceberg.Metadata do
     storage = Iceberg.Config.storage_backend(opts)
 
     with {:ok, version} <- read_version_hint(table_path, opts),
-         {:ok, content} <- storage.download("#{table_path}/metadata/v#{version}.metadata.json") do
+         {:ok, content} <-
+           storage.download("#{table_path}/metadata/v#{version}.metadata.json", opts) do
       {:ok, JSON.decode!(content)}
     else
       {:error, :not_found} = error ->
@@ -277,7 +278,12 @@ defmodule Iceberg.Metadata do
     metadata_path = "#{table_path}/metadata/v#{version}.metadata.json"
     metadata_json = JSON.encode!(metadata)
 
-    with :ok <- storage.upload(metadata_path, metadata_json, content_type: "application/json"),
+    with :ok <-
+           storage.upload(
+             metadata_path,
+             metadata_json,
+             Keyword.merge(opts, content_type: "application/json")
+           ),
          :ok <- update_version_hint(table_path, version, opts) do
       Logger.info(fn -> "Saved metadata version #{version} for table: #{table_path}" end)
       :ok
@@ -417,14 +423,14 @@ defmodule Iceberg.Metadata do
   defp read_version_hint(table_path, opts) do
     storage = Iceberg.Config.storage_backend(opts)
 
-    case storage.download("#{table_path}/metadata/version-hint.text") do
+    case storage.download("#{table_path}/metadata/version-hint.text", opts) do
       {:ok, content} ->
         version = content |> String.trim() |> String.to_integer()
         {:ok, version}
 
       {:error, _} ->
         # Check if v1.metadata.json exists (initial version)
-        case storage.download("#{table_path}/metadata/v1.metadata.json") do
+        case storage.download("#{table_path}/metadata/v1.metadata.json", opts) do
           {:ok, _} -> {:ok, 1}
           {:error, reason} -> {:error, reason}
         end
@@ -437,7 +443,7 @@ defmodule Iceberg.Metadata do
     storage.upload(
       "#{table_path}/metadata/version-hint.text",
       "#{version}",
-      content_type: "text/plain"
+      Keyword.merge(opts, content_type: "text/plain")
     )
   end
 

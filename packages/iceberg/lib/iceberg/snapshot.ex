@@ -85,7 +85,11 @@ defmodule Iceberg.Snapshot do
     relative_path = "#{table_path}/metadata/#{manifest_id}.avro"
     full_path = Iceberg.Config.full_url(relative_path, opts)
 
-    case storage.upload(relative_path, avro_binary, content_type: "application/octet-stream") do
+    case storage.upload(
+           relative_path,
+           avro_binary,
+           Keyword.merge(opts, content_type: "application/octet-stream")
+         ) do
       :ok ->
         manifest_length = byte_size(avro_binary)
 
@@ -114,7 +118,11 @@ defmodule Iceberg.Snapshot do
     relative_path = "#{table_path}/metadata/snap-#{snapshot_id}-#{manifest_list_id}.avro"
     full_path = Iceberg.Config.full_url(relative_path, opts)
 
-    case storage.upload(relative_path, avro_binary, content_type: "application/octet-stream") do
+    case storage.upload(
+           relative_path,
+           avro_binary,
+           Keyword.merge(opts, content_type: "application/octet-stream")
+         ) do
       :ok ->
         Logger.debug(fn ->
           "Uploaded manifest-list: #{relative_path} (#{byte_size(avro_binary)} bytes)"

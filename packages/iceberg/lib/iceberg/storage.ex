@@ -17,7 +17,7 @@ defmodule Iceberg.Storage do
         end
 
         @impl true
-        def download(path) do
+        def download(path, opts) do
           # Download from S3
           {:ok, binary}
         end
@@ -50,47 +50,51 @@ defmodule Iceberg.Storage do
 
   ## Parameters
     - path: Relative path from base URL
+    - opts: Options including :base_url for path resolution
 
   ## Returns
     - `{:ok, binary}` on success
     - `{:error, :not_found}` if file doesn't exist
     - `{:error, reason}` on other failures
   """
-  @callback download(path) :: {:ok, content} | {:error, error}
+  @callback download(path, opts) :: {:ok, content} | {:error, error}
 
   @doc """
   Lists all objects with the given prefix.
 
   ## Parameters
     - prefix: Path prefix to list (e.g., "canonical/events/metadata/")
+    - opts: Options including :base_url for path resolution
 
   ## Returns
     - List of relative paths
     - `{:error, reason}` on failure
   """
-  @callback list(prefix :: path) :: list(path) | {:error, error}
+  @callback list(prefix :: path, opts) :: list(path) | {:error, error}
 
   @doc """
   Deletes an object from storage.
 
   ## Parameters
     - path: Relative path to delete
+    - opts: Options including :base_url for path resolution
 
   ## Returns
     - `:ok` on success (even if file doesn't exist)
     - `{:error, reason}` on failure
   """
-  @callback delete(path) :: :ok | {:error, error}
+  @callback delete(path, opts) :: :ok | {:error, error}
 
   @doc """
   Checks if an object exists.
 
   ## Parameters
     - path: Relative path to check
+    - opts: Options including :base_url for path resolution
 
   ## Returns
     - `true` if exists
     - `false` if doesn't exist
   """
-  @callback exists?(path) :: boolean()
+  @callback exists?(path, opts) :: boolean()
 end

@@ -68,8 +68,8 @@ defmodule IcebergS3 do
   end
 
   @impl true
-  def download(path) do
-    {bucket, key} = parse_s3_path(path, [])
+  def download(path, opts) do
+    {bucket, key} = parse_s3_path(path, opts)
 
     Logger.debug("S3 download: s3://#{bucket}/#{key}")
 
@@ -89,8 +89,8 @@ defmodule IcebergS3 do
   end
 
   @impl true
-  def list(prefix) do
-    {bucket, key_prefix} = parse_s3_path(prefix, [])
+  def list(prefix, opts) do
+    {bucket, key_prefix} = parse_s3_path(prefix, opts)
 
     Logger.debug("S3 list: s3://#{bucket}/#{key_prefix}")
 
@@ -107,8 +107,8 @@ defmodule IcebergS3 do
   end
 
   @impl true
-  def delete(path) do
-    {bucket, key} = parse_s3_path(path, [])
+  def delete(path, opts) do
+    {bucket, key} = parse_s3_path(path, opts)
 
     Logger.debug("S3 delete: s3://#{bucket}/#{key}")
 
@@ -129,8 +129,8 @@ defmodule IcebergS3 do
   end
 
   @impl true
-  def exists?(path) do
-    {bucket, key} = parse_s3_path(path, [])
+  def exists?(path, opts) do
+    {bucket, key} = parse_s3_path(path, opts)
 
     Logger.debug("S3 exists?: s3://#{bucket}/#{key}")
 

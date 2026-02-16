@@ -529,7 +529,7 @@ defmodule Iceberg.Table do
       "Registering files for table: #{table_path} with pattern: #{file_pattern}"
     end)
 
-    matching_files = find_matching_files(storage, table_path, file_pattern)
+    matching_files = find_matching_files(storage, table_path, file_pattern, opts)
 
     if matching_files == [] do
       Logger.debug(fn -> "No files matched pattern #{file_pattern}" end)
@@ -539,8 +539,8 @@ defmodule Iceberg.Table do
     end
   end
 
-  @spec find_matching_files(module(), String.t(), String.t()) :: list(String.t())
-  defp find_matching_files(storage, table_path, file_pattern) do
+  @spec find_matching_files(module(), String.t(), String.t(), keyword()) :: list(String.t())
+  defp find_matching_files(storage, table_path, file_pattern, opts) do
     # Extract the prefix from the pattern (before any wildcard)
     file_prefix =
       file_pattern
@@ -551,7 +551,7 @@ defmodule Iceberg.Table do
 
     # List files matching the pattern
     data_prefix = "#{table_path}/data/"
-    files = storage.list(data_prefix)
+    files = storage.list(data_prefix, opts)
 
     Enum.filter(files, fn f ->
       file_prefix == "" || String.contains?(f, file_prefix)
@@ -623,9 +623,9 @@ defmodule Iceberg.Table do
     storage = Iceberg.Config.storage_backend(opts)
     data_prefix = "#{table_path}/data/"
 
-    case storage.list(data_prefix) do
+    case storage.list(data_prefix, opts) do
       files when is_list(files) ->
-        delete_files_with_error_tracking(files, storage, data_prefix)
+        delete_files_with_error_tracking(files, storage, data_prefix, opts)
 
       {:error, _reason} ->
         # If directory doesn't exist, that's fine
@@ -634,10 +634,10 @@ defmodule Iceberg.Table do
     end
   end
 
-  @spec delete_files_with_error_tracking(list(String.t()), module(), String.t()) :: :ok
-  defp delete_files_with_error_tracking(files, storage, data_prefix) do
+  @spec delete_files_with_error_tracking(list(String.t()), module(), String.t(), keyword()) :: :ok
+  defp delete_files_with_error_tracking(files, storage, data_prefix, opts) do
     # Delete all data files and collect results
-    results = Enum.map(files, &safe_delete(storage, &1))
+    results = Enum.map(files, &safe_delete(storage, &1, opts))
     errors = Enum.filter(results, &match?({:error, _}, &1))
 
     if Enum.empty?(errors) do
@@ -654,9 +654,9 @@ defmodule Iceberg.Table do
     end
   end
 
-  @spec safe_delete(module(), String.t()) :: :ok | {:error, term()}
-  defp safe_delete(storage, file) do
-    storage.delete(file)
+  @spec safe_delete(module(), String.t(), keyword()) :: :ok | {:error, term()}
+  defp safe_delete(storage, file, opts) do
+    storage.delete(file, opts)
   end
 
   # Converts legacy tuple-based schema to Iceberg schema format
