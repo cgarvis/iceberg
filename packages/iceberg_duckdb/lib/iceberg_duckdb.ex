@@ -382,9 +382,39 @@ defmodule IcebergDuckdb do
   def build_copy_statement(source_query, dest_path, opts \\ []) do
     partition_by = opts[:partition_by] || []
 
-    # Build partition option conditionally using pattern matching
-    partition_option =
+    # DuckDB's PARTITION_BY removes the partition column from the parquet file,
+    # storing it only in the Hive directory path. This breaks Iceberg correctness
+    # since Iceberg expects all schema columns to be present in data files.
+    #
+    # Fix: wrap the source query to add synthetic partition key columns
+    # (prefixed with __iceberg_part_) derived from the original columns.
+    # DuckDB removes the synthetic columns (putting them in directory names),
+    # while the original schema columns remain in the parquet file.
+    {effective_query, synthetic_partition_cols} =
       case partition_by do
+        [] ->
+          {source_query, []}
+
+        cols ->
+          col_strs = Enum.map(cols, &to_string/1)
+
+          synthetic_exprs =
+            Enum.map(col_strs, fn col ->
+              key = "__iceberg_part_#{col}__"
+              "CAST(CAST(#{col} AS DATE) AS VARCHAR) AS #{key}"
+            end)
+
+          synthetic_names = Enum.map(col_strs, fn col -> "__iceberg_part_#{col}__" end)
+
+          wrapped =
+            "SELECT *, #{Enum.join(synthetic_exprs, ", ")} FROM (#{source_query})"
+
+          {wrapped, synthetic_names}
+      end
+
+    # Build partition option using synthetic column names
+    partition_option =
+      case synthetic_partition_cols do
         [] -> []
         parts -> ["PARTITION_BY (#{Enum.join(parts, ", ")})"]
       end
@@ -405,7 +435,7 @@ defmodule IcebergDuckdb do
         ["OVERWRITE_OR_IGNORE true", "FILENAME_PATTERN 'data-{uuid}'"]
 
     """
-    COPY (#{source_query})
+    COPY (#{effective_query})
     TO '#{dest_path}'
     (#{Enum.join(copy_options, ", ")})
     """
