@@ -46,14 +46,18 @@ defmodule Iceberg.Snapshot do
     Logger.info(fn -> "Creating snapshot #{snapshot_id} for table: #{table_path}" end)
 
     manifest_opts = [table_schema: table_schema, schema_id: schema_id]
+    # For append operations, carry forward manifests from the parent snapshot so
+    # that all historical data files remain visible in the new snapshot.
+    parent_manifests = Keyword.get(opts, :parent_manifests, [])
 
     with {:ok, stats} <- ParquetStats.extract(conn, data_file_pattern, opts),
          {:ok, manifest_avro} <-
            Manifest.create(stats, snapshot_id, partition_spec, manifest_opts),
          {:ok, manifest_metadata} <-
            upload_manifest(manifest_avro, table_path, snapshot_id, opts),
+         all_manifests <- build_manifest_list(operation, parent_manifests, manifest_metadata),
          {:ok, manifest_list_avro} <-
-           ManifestList.create([manifest_metadata], snapshot_id, sequence_number),
+           ManifestList.create(all_manifests, snapshot_id, sequence_number),
          {:ok, manifest_list_path} <-
            upload_manifest_list(manifest_list_avro, table_path, snapshot_id, opts) do
       snapshot =
@@ -62,7 +66,8 @@ defmodule Iceberg.Snapshot do
           manifest_list_path,
           stats,
           operation,
-          source_file
+          source_file,
+          all_manifests
         )
 
       Logger.info(fn ->
@@ -135,7 +140,22 @@ defmodule Iceberg.Snapshot do
     end
   end
 
-  defp build_snapshot_metadata(snapshot_id, manifest_list_path, stats, operation, source_file) do
+  # For append: accumulate all manifests (parent + new).
+  # For overwrite: only the new manifest (discard previous data).
+  defp build_manifest_list("append", parent_manifests, new_manifest),
+    do: parent_manifests ++ [new_manifest]
+
+  defp build_manifest_list(_operation, _parent_manifests, new_manifest),
+    do: [new_manifest]
+
+  defp build_snapshot_metadata(
+         snapshot_id,
+         manifest_list_path,
+         stats,
+         operation,
+         source_file,
+         all_manifests
+       ) do
     total_files = length(stats)
     total_rows = total_records(stats)
     total_bytes = Enum.sum(Enum.map(stats, & &1[:file_size_in_bytes]))
@@ -159,7 +179,10 @@ defmodule Iceberg.Snapshot do
       "timestamp-ms" => System.system_time(:millisecond),
       "manifest-list" => manifest_list_path,
       "summary" => summary,
-      "schema-id" => 0
+      "schema-id" => 0,
+      # Non-standard field: stores manifest metadata in JSON so that subsequent
+      # append snapshots can include previous manifests without Avro decoding.
+      "manifest-entries" => all_manifests
     }
   end
 

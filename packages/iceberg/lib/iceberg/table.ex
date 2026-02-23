@@ -585,6 +585,15 @@ defmodule Iceberg.Table do
     schema_id = metadata["current-schema-id"] || 0
     data_url_pattern = Iceberg.Config.full_url(file_pattern, opts)
 
+    # For append operations, carry forward manifests from the current snapshot
+    # so that new snapshots accumulate all historical data files.
+    parent_manifests =
+      if operation == "append" do
+        get_current_snapshot_manifests(metadata)
+      else
+        []
+      end
+
     Keyword.merge(opts,
       partition_spec: partition_spec,
       sequence_number: sequence_number,
@@ -592,8 +601,29 @@ defmodule Iceberg.Table do
       table_schema: table_schema,
       schema_id: schema_id,
       source_file: source_file,
-      data_url: data_url_pattern
+      data_url: data_url_pattern,
+      parent_manifests: parent_manifests
     )
+  end
+
+  # Extracts accumulated manifest entries from the current snapshot's JSON metadata.
+  # These are stored under the "manifest-entries" key in each snapshot map.
+  # Returns [] if the table has no snapshots yet or the current snapshot has no entries.
+  @spec get_current_snapshot_manifests(map()) :: list(map())
+  defp get_current_snapshot_manifests(metadata) do
+    current_id = metadata["current-snapshot-id"]
+
+    if current_id && current_id > 0 do
+      metadata["snapshots"]
+      |> List.wrap()
+      |> Enum.find(&(&1["snapshot-id"] == current_id))
+      |> case do
+        nil -> []
+        snapshot -> snapshot["manifest-entries"] || []
+      end
+    else
+      []
+    end
   end
 
   ## Private Functions
