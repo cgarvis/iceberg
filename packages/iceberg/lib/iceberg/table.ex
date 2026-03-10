@@ -45,7 +45,7 @@ defmodule Iceberg.Table do
   - Inconsistent metadata state
   """
 
-  alias Iceberg.{Error, Metadata, Snapshot, SchemaEvolution}
+  alias Iceberg.{Error, Maintenance, Metadata, Snapshot, SchemaEvolution}
   require Logger
 
   @doc """
@@ -703,6 +703,33 @@ defmodule Iceberg.Table do
     else
       []
     end
+  end
+
+  @doc """
+  Expires old snapshots and deletes their orphaned manifest files.
+
+  Delegates to `Iceberg.Maintenance.expire_snapshots/2`. See that module for
+  full documentation on options and behaviour.
+
+  ## Parameters
+    - schema_module_or_path: Schema module or table path string
+    - opts: Options (`:older_than`, `:retain_last`, `:snapshot_ids`, `:dry_run`, etc.)
+
+  ## Returns
+    `{:ok, %{deleted_data_files: 0, deleted_manifest_files: N, deleted_manifest_lists: M, deleted_snapshots: K}}`
+    `{:error, reason}` — operation failed
+  """
+  @spec expire_snapshots(module() | String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def expire_snapshots(schema_module_or_path, opts \\ [])
+
+  def expire_snapshots(schema_module, opts) when is_atom(schema_module) do
+    table_path = schema_module.__table_path__()
+    Maintenance.expire_snapshots(table_path, opts)
+  end
+
+  def expire_snapshots(table_path, opts) when is_binary(table_path) do
+    Maintenance.expire_snapshots(table_path, opts)
   end
 
   ## Private Functions

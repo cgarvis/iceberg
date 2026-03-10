@@ -310,6 +310,41 @@ defmodule Iceberg.Metadata do
   end
 
   @doc """
+  Removes snapshots from metadata by ID, preserving the current snapshot.
+
+  Removes the given snapshot IDs from both the snapshots list and snapshot-log.
+  The current snapshot is always preserved even if its ID is in `snapshot_ids_to_remove`.
+
+  ## Parameters
+    - metadata: Current metadata map
+    - snapshot_ids_to_remove: MapSet of snapshot IDs to remove
+
+  ## Returns
+    `{:ok, updated_metadata}` - Metadata with snapshots removed
+  """
+  @spec remove_snapshots(map(), MapSet.t()) :: {:ok, map()}
+  def remove_snapshots(metadata, snapshot_ids_to_remove) do
+    current_id = metadata["current-snapshot-id"]
+    safe_ids_to_remove = MapSet.delete(snapshot_ids_to_remove, current_id)
+
+    updated_snapshots =
+      (metadata["snapshots"] || [])
+      |> Enum.reject(fn s -> MapSet.member?(safe_ids_to_remove, s["snapshot-id"]) end)
+
+    updated_log =
+      (metadata["snapshot-log"] || [])
+      |> Enum.reject(fn entry -> MapSet.member?(safe_ids_to_remove, entry["snapshot-id"]) end)
+
+    updated_metadata =
+      metadata
+      |> Map.put("snapshots", updated_snapshots)
+      |> Map.put("snapshot-log", updated_log)
+      |> Map.put("last-updated-ms", System.system_time(:millisecond))
+
+    {:ok, updated_metadata}
+  end
+
+  @doc """
   Gets the source file from the latest snapshot's summary.
   Used for cursor-like incremental processing.
 
