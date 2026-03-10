@@ -44,7 +44,7 @@ defmodule Iceberg.Storage.Local do
   end
 
   @impl true
-  def download(path) do
+  def download(path, _opts) do
     dest = full_path(path)
 
     case File.read(dest) do
@@ -55,7 +55,7 @@ defmodule Iceberg.Storage.Local do
   end
 
   @impl true
-  def list(prefix) do
+  def list(prefix, _opts) do
     dir = full_path(prefix)
 
     if File.dir?(dir) do
@@ -70,14 +70,14 @@ defmodule Iceberg.Storage.Local do
   end
 
   @impl true
-  def delete(path) do
+  def delete(path, _opts) do
     dest = full_path(path)
     File.rm(dest)
     :ok
   end
 
   @impl true
-  def exists?(path) do
+  def exists?(path, _opts) do
     dest = full_path(path)
     File.exists?(dest)
   end

@@ -129,7 +129,7 @@ defmodule Iceberg.MetadataTest do
 
       :ok = Metadata.save("test/table", metadata, @opts)
 
-      {:ok, hint} = Memory.download("test/table/metadata/version-hint.text")
+      {:ok, hint} = Memory.download("test/table/metadata/version-hint.text", [])
       assert String.trim(hint) == "0"
     end
   end

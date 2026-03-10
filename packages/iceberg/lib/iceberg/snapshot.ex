@@ -123,7 +123,10 @@ defmodule Iceberg.Snapshot do
            ),
          # Create DELETED manifest for old files (status=2)
          {:ok, deleted_manifest_avro} <-
-           Manifest.create(deleted_files_metadata, snapshot_id, partition_spec,
+           Manifest.create(
+             deleted_files_metadata,
+             snapshot_id,
+             partition_spec,
              Keyword.put(manifest_opts, :status, 2)
            ),
          {:ok, deleted_manifest_metadata} <-

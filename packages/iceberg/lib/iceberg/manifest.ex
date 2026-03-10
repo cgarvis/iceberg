@@ -67,7 +67,10 @@ defmodule Iceberg.Manifest do
     status = Keyword.get(opts, :status, 1)
 
     manifest_entries =
-      Enum.map(data_files, &build_manifest_entry(&1, snapshot_id, partition_spec, table_schema, status))
+      Enum.map(
+        data_files,
+        &build_manifest_entry(&1, snapshot_id, partition_spec, table_schema, status)
+      )
 
     # Build Iceberg-specific Avro file metadata per the spec:
     # https://iceberg.apache.org/spec/#manifests

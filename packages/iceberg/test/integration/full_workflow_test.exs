@@ -149,7 +149,7 @@ defmodule Iceberg.Integration.FullWorkflowTest do
       :ok = Table.create(Iceberg.Test.Schemas.Simple, nil, @opts)
 
       # After create, version-hint should be 0
-      {:ok, hint1} = Memory.download("canonical/simple/metadata/version-hint.text")
+      {:ok, hint1} = Memory.download("canonical/simple/metadata/version-hint.text", [])
       assert String.trim(hint1) == "0"
 
       # After first snapshot
@@ -176,7 +176,7 @@ defmodule Iceberg.Integration.FullWorkflowTest do
       {:ok, updated} = Metadata.add_snapshot(metadata, snapshot)
       :ok = Metadata.save("canonical/simple", updated, @opts)
 
-      {:ok, hint2} = Memory.download("canonical/simple/metadata/version-hint.text")
+      {:ok, hint2} = Memory.download("canonical/simple/metadata/version-hint.text", [])
       assert String.trim(hint2) == "1"
     end
 
