@@ -308,4 +308,209 @@ defmodule Iceberg.MaintenanceTest do
       assert length(metadata["snapshots"]) == 1
     end
   end
+
+  describe "remove_orphan_files/2" do
+    test "no orphan files returns zero counts" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+      create_snapshot("test/table", "file1.parquet")
+
+      assert {:ok, result} = Table.remove_orphan_files("test/table", @opts)
+
+      assert result.deleted_files == 0
+      assert result.deleted_paths == []
+    end
+
+    test "detects and deletes orphaned avro files" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+      create_snapshot("test/table", "file1.parquet")
+
+      # Upload a fake orphan file into the metadata directory
+      Memory.upload("test/table/metadata/orphan-file.avro", "fake", [])
+
+      assert {:ok, result} = Table.remove_orphan_files("test/table", @opts)
+
+      assert result.deleted_files == 1
+
+      # The orphan should be gone from storage
+      files = Memory.dump()
+      refute Map.has_key?(files, "test/table/metadata/orphan-file.avro")
+    end
+
+    test "does not delete referenced manifest files" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+      create_snapshot("test/table", "file1.parquet")
+
+      {:ok, metadata} = Iceberg.Metadata.load("test/table", @opts)
+      current_id = metadata["current-snapshot-id"]
+      current_snap = Enum.find(metadata["snapshots"], &(&1["snapshot-id"] == current_id))
+
+      manifest_paths =
+        (current_snap["manifest-entries"] || [])
+        |> Enum.map(&(&1["manifest_path"] || &1[:manifest_path]))
+        |> Enum.reject(&is_nil/1)
+
+      manifest_list_path = current_snap["manifest-list"]
+
+      assert {:ok, _result} = Table.remove_orphan_files("test/table", @opts)
+
+      files_after = Memory.dump()
+
+      # All manifest files referenced by the snapshot must still exist
+      for path <- manifest_paths do
+        relative = String.replace_prefix(path, "memory://test/", "")
+
+        assert Map.has_key?(files_after, relative),
+               "Expected referenced manifest to still exist: #{relative}"
+      end
+
+      # The manifest list itself must still exist
+      if manifest_list_path do
+        relative_ml = String.replace_prefix(manifest_list_path, "memory://test/", "")
+
+        assert Map.has_key?(files_after, relative_ml),
+               "Expected manifest list to still exist: #{relative_ml}"
+      end
+    end
+
+    test "dry_run returns candidates without deleting" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+      create_snapshot("test/table", "file1.parquet")
+
+      Memory.upload("test/table/metadata/orphan-file.avro", "fake", [])
+      files_before = Memory.dump()
+
+      assert {:ok, result} =
+               Table.remove_orphan_files("test/table", Keyword.put(@opts, :dry_run, true))
+
+      assert result.deleted_files == 1
+      assert "test/table/metadata/orphan-file.avro" in result.deleted_paths
+
+      # File must still exist after dry run
+      files_after = Memory.dump()
+      assert map_size(files_before) == map_size(files_after)
+      assert Map.has_key?(files_after, "test/table/metadata/orphan-file.avro")
+    end
+
+    test "does not delete version-hint.text or metadata JSON files" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      assert {:ok, result} = Table.remove_orphan_files("test/table", @opts)
+
+      assert result.deleted_files == 0
+
+      files = Memory.dump()
+      assert Map.has_key?(files, "test/table/metadata/version-hint.text")
+
+      # At least one versioned metadata JSON should still be present
+      metadata_jsons =
+        files
+        |> Map.keys()
+        |> Enum.filter(&Regex.match?(~r/v\d+\.metadata\.json$/, &1))
+
+      assert length(metadata_jsons) > 0
+    end
+
+    test "handles table with no snapshots" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      Memory.upload("test/table/metadata/orphan-file.avro", "fake", [])
+
+      assert {:ok, result} = Table.remove_orphan_files("test/table", @opts)
+
+      assert result.deleted_files == 1
+
+      files = Memory.dump()
+      refute Map.has_key?(files, "test/table/metadata/orphan-file.avro")
+    end
+
+    test "cleans up files left behind by expire_snapshots" do
+      # Validates the primary collaboration between the two maintenance operations:
+      # expire_snapshots removes snapshot entries from metadata, and
+      # remove_orphan_files is responsible for cleaning up the actual storage files
+      # that belonged to those expired snapshots (manifest lists whose snapshots no
+      # longer exist in the metadata log).
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      create_snapshot("test/table", "file1.parquet")
+      create_snapshot("test/table", "file2.parquet")
+
+      # Record all .avro files present before expiration
+      files_before = Memory.dump()
+
+      avro_keys_before =
+        files_before |> Map.keys() |> Enum.filter(&String.ends_with?(&1, ".avro")) |> MapSet.new()
+
+      # Expire the first snapshot (retain_last: 1 keeps only the current one)
+      older_than = DateTime.utc_now() |> DateTime.add(1, :second)
+
+      assert {:ok, expire_result} =
+               Table.expire_snapshots(
+                 "test/table",
+                 Keyword.merge(@opts, older_than: older_than, retain_last: 1)
+               )
+
+      assert expire_result.deleted_manifest_lists == 1
+
+      # After expire_snapshots the metadata no longer references the old manifest list,
+      # but the snap-*.avro file for the expired snapshot may still be in storage
+      # if expire_snapshots deleted the manifest-list file it should be gone, but
+      # a manifest (.avro) that was shared via parent_manifests may still be around.
+      # remove_orphan_files must delete any remaining unreferenced .avro files.
+      assert {:ok, orphan_result} = Table.remove_orphan_files("test/table", @opts)
+
+      files_after = Memory.dump()
+
+      avro_keys_after =
+        files_after |> Map.keys() |> Enum.filter(&String.ends_with?(&1, ".avro")) |> MapSet.new()
+
+      # The combined cleanup must have reduced the avro file count
+      assert MapSet.size(avro_keys_after) < MapSet.size(avro_keys_before),
+             "Expected fewer .avro files after both maintenance operations"
+
+      # Confirm the deleted count is consistent
+      assert expire_result.deleted_manifest_lists + orphan_result.deleted_files ==
+               MapSet.size(avro_keys_before) - MapSet.size(avro_keys_after)
+    end
+
+    test "does not delete manifest list files referenced by multiple snapshots" do
+      # A manifest-list file belongs to exactly one snapshot, but a manifest (content
+      # file) can be shared across snapshots via parent_manifests carry-forward.
+      # Verify that remove_orphan_files does not delete shared manifests.
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      create_snapshot("test/table", "file1.parquet")
+      create_snapshot("test/table", "file2.parquet")
+
+      # Both snapshots reference file1's manifest via parent_manifests carry-forward
+      {:ok, metadata} = Iceberg.Metadata.load("test/table", @opts)
+      current_id = metadata["current-snapshot-id"]
+      current_snap = Enum.find(metadata["snapshots"], &(&1["snapshot-id"] == current_id))
+
+      shared_manifest_paths =
+        (current_snap["manifest-entries"] || [])
+        |> Enum.map(&(&1["manifest_path"] || &1[:manifest_path]))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map(&String.replace_prefix(&1, "memory://test/", ""))
+
+      assert length(shared_manifest_paths) >= 1
+
+      assert {:ok, result} = Table.remove_orphan_files("test/table", @opts)
+      assert result.deleted_files == 0
+
+      files_after = Memory.dump()
+
+      for path <- shared_manifest_paths do
+        assert Map.has_key?(files_after, path),
+               "Shared manifest #{path} must not be deleted by remove_orphan_files"
+      end
+    end
+  end
 end

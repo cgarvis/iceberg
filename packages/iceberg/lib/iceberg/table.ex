@@ -732,6 +732,36 @@ defmodule Iceberg.Table do
     Maintenance.expire_snapshots(table_path, opts)
   end
 
+  @doc """
+  Scans the table's metadata directory and deletes files not referenced by any snapshot.
+
+  Delegates to `Iceberg.Maintenance.remove_orphan_files/2`. See that module for
+  full documentation on options and behaviour.
+
+  Metadata JSON files (`v\\d+\\.metadata\\.json`) and `version-hint.text` are never
+  treated as orphans. Data files under `data/` are not scanned.
+
+  ## Parameters
+    - schema_module_or_path: Schema module or table path string
+    - opts: Options (`:older_than`, `:dry_run`, `:location`, etc.)
+
+  ## Returns
+    - `{:ok, %{deleted_files: N, deleted_paths: [...]}}` — paths populated only on dry run.
+    - `{:error, reason}` — operation failed.
+  """
+  @spec remove_orphan_files(module() | String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def remove_orphan_files(schema_module_or_path, opts \\ [])
+
+  def remove_orphan_files(schema_module, opts) when is_atom(schema_module) do
+    table_path = schema_module.__table_path__()
+    Maintenance.remove_orphan_files(table_path, opts)
+  end
+
+  def remove_orphan_files(table_path, opts) when is_binary(table_path) do
+    Maintenance.remove_orphan_files(table_path, opts)
+  end
+
   ## Private Functions
 
   @spec write_data_files(term(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}

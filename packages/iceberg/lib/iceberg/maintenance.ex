@@ -245,15 +245,28 @@ defmodule Iceberg.Maintenance do
 
   # Retrieves a value from a map using either an atom or string key.
   # Handles the mixed key types that arise from JSON round-trips.
+  # Uses explicit nil checks rather than || so that legitimate falsy values
+  # (e.g. false, 0) stored under the primary key are returned as-is and do
+  # not fall through to the secondary key lookup.
   @spec get_field(map(), atom() | String.t(), term()) :: term()
   defp get_field(map, key, default) when is_atom(key) do
-    map[key] || map[to_string(key)] || default
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> Map.get(map, to_string(key), default)
+    end
   end
 
   defp get_field(map, key, default) when is_binary(key) do
-    map[key] || map[String.to_existing_atom(key)] || default
+    case Map.fetch(map, key) do
+      {:ok, value} ->
+        value
+
+      :error ->
+        atom_key = String.to_existing_atom(key)
+        Map.get(map, atom_key, default)
+    end
   rescue
-    ArgumentError -> map[key] || default
+    ArgumentError -> default
   end
 
   # Strips the base_url prefix from a full URL to get the relative storage path.
@@ -267,6 +280,106 @@ defmodule Iceberg.Maintenance do
     else
       full_url
     end
+  end
+
+  @doc """
+  Scans the table's metadata directory and deletes files not referenced by any snapshot.
+
+  Orphan files are files that exist in `{table_path}/metadata/` but are not referenced
+  by any current snapshot's manifest list or manifest entries. Metadata JSON files
+  (matching `v\\d+\\.metadata\\.json`) and `version-hint.text` are never treated as
+  orphans — their lifecycle is managed separately.
+
+  Data files under `{table_path}/data/` are **not** scanned because Avro decoding
+  is not implemented and referenced data files cannot be determined.
+
+  ## Parameters
+    - table_path: Relative path to the table (e.g., "canonical/events")
+    - opts: Options
+      - `:older_than` - Accepted but not enforced (no file timestamps available).
+      - `:dry_run` - Boolean — if true, return candidates without deleting (default: false).
+      - `:location` - Override the scan prefix (default: `{table_path}/metadata/`).
+      - `:storage` - Storage backend module (required).
+      - `:base_url` - Base URL for storage paths (required).
+
+  ## Returns
+    - `{:ok, %{deleted_files: N, deleted_paths: [...]}}` — paths are populated only on dry run.
+    - `{:error, reason}` — operation failed.
+  """
+  @spec remove_orphan_files(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def remove_orphan_files(table_path, opts \\ []) do
+    Logger.info(fn -> "Starting remove_orphan_files for table: #{table_path}" end)
+
+    with {:ok, metadata} <- Metadata.load(table_path, opts) do
+      storage = Iceberg.Config.storage_backend(opts)
+      base_url = Iceberg.Config.base_url(opts)
+      dry_run = Keyword.get(opts, :dry_run, false)
+      prefix = Keyword.get(opts, :location, "#{table_path}/metadata/")
+
+      snapshots = metadata["snapshots"] || []
+
+      # Build the set of referenced relative paths
+      referenced =
+        build_referenced_set(table_path, snapshots, base_url)
+
+      # List all files under the metadata prefix (returns relative paths)
+      all_files = storage.list(prefix, opts)
+
+      # Compute orphans: not referenced AND not a versioned metadata JSON
+      metadata_json_pattern = ~r/v\d+\.metadata\.json$/
+
+      orphans =
+        Enum.filter(all_files, fn path ->
+          not MapSet.member?(referenced, path) and
+            not Regex.match?(metadata_json_pattern, path)
+        end)
+
+      count = length(orphans)
+
+      Logger.info(fn ->
+        "Found #{count} orphan file(s) in #{prefix} (dry_run: #{dry_run})"
+      end)
+
+      if dry_run do
+        {:ok, %{deleted_files: count, deleted_paths: orphans}}
+      else
+        Enum.each(orphans, fn path ->
+          case storage.delete(path, opts) do
+            :ok ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning(fn ->
+                "Failed to delete orphan #{path}: #{inspect(reason)}"
+              end)
+          end
+        end)
+
+        {:ok, %{deleted_files: count, deleted_paths: []}}
+      end
+    end
+  end
+
+  # Builds a MapSet of relative paths that are referenced by snapshots or are
+  # protected system files (version-hint.text).
+  @spec build_referenced_set(String.t(), list(map()), String.t()) :: MapSet.t()
+  defp build_referenced_set(table_path, snapshots, base_url) do
+    manifest_lists =
+      snapshots
+      |> collect_manifest_lists()
+      |> MapSet.new(&strip_base_url(&1, base_url))
+
+    manifests =
+      snapshots
+      |> collect_manifests()
+      |> MapSet.new(&strip_base_url(&1, base_url))
+
+    protected =
+      MapSet.new(["#{table_path}/metadata/version-hint.text"])
+
+    protected
+    |> MapSet.union(manifest_lists)
+    |> MapSet.union(manifests)
   end
 
   @spec to_integer_safe(integer() | String.t() | term(), integer()) :: integer()
