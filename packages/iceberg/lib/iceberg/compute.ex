@@ -115,7 +115,12 @@ defmodule Iceberg.Compute do
     - `{:ok, result}` on success
     - `{:error, reason}` on failure
   """
-  @callback compact(connection, input_files :: list(String.t()), output_path :: String.t(), opts :: keyword()) ::
+  @callback compact(
+              connection,
+              input_files :: list(String.t()),
+              output_path :: String.t(),
+              opts :: keyword()
+            ) ::
               {:ok, result} | {:error, error}
 
   @optional_callbacks [compact: 4]

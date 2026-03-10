@@ -239,7 +239,8 @@ File.mkdir_p!(expired_data_dir)
 
 # Expire the first two snapshots explicitly by ID
 {:ok, _result} =
-  Table.expire_snapshots(expired_table,
+  Table.expire_snapshots(
+    expired_table,
     Keyword.merge(opts, snapshot_ids: [snap_e1["snapshot-id"], snap_e2["snapshot-id"]])
   )
 

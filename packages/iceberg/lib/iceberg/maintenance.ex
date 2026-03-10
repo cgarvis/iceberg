@@ -610,7 +610,15 @@ defmodule Iceberg.Maintenance do
     |> MapSet.union(manifests)
   end
 
-  @spec execute_compaction(term(), String.t(), map(), list(list(String.t())), map(), module(), keyword()) ::
+  @spec execute_compaction(
+          term(),
+          String.t(),
+          map(),
+          list(list(String.t())),
+          map(),
+          module(),
+          keyword()
+        ) ::
           {:ok, map()} | {:error, term()}
   defp execute_compaction(conn, table_path, metadata, bins, stats_by_path, compute, opts) do
     results =

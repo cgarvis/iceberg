@@ -562,7 +562,10 @@ defmodule Iceberg.MaintenanceTest do
 
       # Verify the new snapshot has 3 manifest entries
       new_current_id = metadata_after["current-snapshot-id"]
-      new_current_snap = Enum.find(metadata_after["snapshots"], &(&1["snapshot-id"] == new_current_id))
+
+      new_current_snap =
+        Enum.find(metadata_after["snapshots"], &(&1["snapshot-id"] == new_current_id))
+
       assert length(new_current_snap["manifest-entries"]) == 3
     end
 
