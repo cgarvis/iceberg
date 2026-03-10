@@ -34,3 +34,8 @@ tmp/
 # Package mix.lock files (libraries in a monorepo)
 # The root workspace mix.lock is tracked
 packages/*/mix.lock
+
+# Python cross-language validation test artifacts
+packages/iceberg/test/integration/python/.venv/
+packages/iceberg/test/integration/python/__pycache__/
+packages/iceberg/test/integration/python/.pytest_cache/
