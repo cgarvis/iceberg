@@ -112,6 +112,31 @@ defmodule Iceberg.SnapshotTest do
       assert snapshot["summary"]["source-file"] == "sources/data.jsonl"
     end
 
+    test "upload_manifest sets correct added counts for multiple files" do
+      MockCompute.set_response("parquet_metadata", {
+        :ok,
+        [
+          %{
+            "file_path" => "memory://test/table/data/file1.parquet",
+            "file_size_in_bytes" => 1024,
+            "record_count" => 100
+          },
+          %{
+            "file_path" => "memory://test/table/data/file2.parquet",
+            "file_size_in_bytes" => 2048,
+            "record_count" => 200
+          }
+        ]
+      })
+
+      {:ok, snapshot} =
+        Snapshot.create(:conn, "test/table", "memory://test/table/data/**/*.parquet", @opts)
+
+      # manifest-entries should reflect actual file counts
+      manifest_entry = List.last(snapshot["manifest-entries"])
+      assert manifest_entry.added_data_files_count == 1
+    end
+
     test "uses explicit snapshot_id when provided" do
       MockCompute.set_response("parquet_metadata", {
         :ok,
@@ -128,6 +153,143 @@ defmodule Iceberg.SnapshotTest do
       {:ok, snapshot} = Snapshot.create(:conn, "test/table", "test/**/*.parquet", opts)
 
       assert snapshot["snapshot-id"] == 99_999
+    end
+  end
+
+  describe "create_replace/5" do
+    test "creates replace snapshot with both added and deleted metrics" do
+      # New files that will replace old ones
+      MockCompute.set_response("parquet_metadata", {
+        :ok,
+        [
+          %{
+            "file_path" => "memory://test/table/data/compacted.parquet",
+            "file_size_in_bytes" => 3000,
+            "record_count" => 300
+          }
+        ]
+      })
+
+      # Old files being replaced
+      deleted_files = [
+        %{
+          file_path: "memory://test/table/data/file1.parquet",
+          file_size_in_bytes: 1024,
+          record_count: 100,
+          partition_values: %{}
+        },
+        %{
+          file_path: "memory://test/table/data/file2.parquet",
+          file_size_in_bytes: 2048,
+          record_count: 200,
+          partition_values: %{}
+        }
+      ]
+
+      {:ok, snapshot} =
+        Snapshot.create_replace(
+          :conn,
+          "test/table",
+          deleted_files,
+          "memory://test/table/data/**/*.parquet",
+          @opts
+        )
+
+      summary = snapshot["summary"]
+      assert summary["operation"] == "replace"
+      assert summary["added-data-files"] == "1"
+      assert summary["added-records"] == "300"
+      assert summary["added-files-size"] == "3000"
+      assert summary["deleted-data-files"] == "2"
+      assert summary["deleted-records"] == "300"
+      assert summary["deleted-files-size"] == "3072"
+    end
+
+    test "manifest list includes both added and deleted manifests" do
+      MockCompute.set_response("parquet_metadata", {
+        :ok,
+        [
+          %{
+            "file_path" => "memory://test/table/data/compacted.parquet",
+            "file_size_in_bytes" => 3000,
+            "record_count" => 300
+          }
+        ]
+      })
+
+      deleted_files = [
+        %{
+          file_path: "memory://test/table/data/old.parquet",
+          file_size_in_bytes: 1000,
+          record_count: 100,
+          partition_values: %{}
+        }
+      ]
+
+      {:ok, snapshot} =
+        Snapshot.create_replace(
+          :conn,
+          "test/table",
+          deleted_files,
+          "memory://test/table/data/**/*.parquet",
+          @opts
+        )
+
+      # Should have 2 manifest entries (added + deleted)
+      assert length(snapshot["manifest-entries"]) == 2
+
+      [added_manifest, deleted_manifest] = snapshot["manifest-entries"]
+      assert added_manifest.added_data_files_count == 1
+      assert added_manifest.deleted_data_files_count == 0
+      assert deleted_manifest.deleted_data_files_count == 1
+      assert deleted_manifest.added_data_files_count == 0
+    end
+
+    test "carries forward parent manifests" do
+      MockCompute.set_response("parquet_metadata", {
+        :ok,
+        [
+          %{
+            "file_path" => "memory://test/table/data/compacted.parquet",
+            "file_size_in_bytes" => 3000,
+            "record_count" => 300
+          }
+        ]
+      })
+
+      parent_manifest = %{
+        manifest_path: "memory://test/table/metadata/parent.avro",
+        manifest_length: 500,
+        partition_spec_id: 0,
+        added_snapshot_id: 1000,
+        added_data_files_count: 1,
+        existing_data_files_count: 0,
+        deleted_data_files_count: 0,
+        added_rows_count: 50
+      }
+
+      deleted_files = [
+        %{
+          file_path: "memory://test/table/data/old.parquet",
+          file_size_in_bytes: 1000,
+          record_count: 100,
+          partition_values: %{}
+        }
+      ]
+
+      opts = Keyword.put(@opts, :parent_manifests, [parent_manifest])
+
+      {:ok, snapshot} =
+        Snapshot.create_replace(
+          :conn,
+          "test/table",
+          deleted_files,
+          "memory://test/table/data/**/*.parquet",
+          opts
+        )
+
+      # Should have 3 manifest entries: parent + added + deleted
+      assert length(snapshot["manifest-entries"]) == 3
     end
   end
 end

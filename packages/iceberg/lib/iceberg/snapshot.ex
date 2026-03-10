@@ -82,9 +82,89 @@ defmodule Iceberg.Snapshot do
     end
   end
 
+  @doc """
+  Creates a replace snapshot that swaps old data files for new ones.
+
+  Used for compaction — the logical data doesn't change, but files are reorganized.
+
+  ## Parameters
+    - conn: Compute backend connection
+    - table_path: Relative Iceberg table path
+    - deleted_files_metadata: List of metadata maps for files being replaced
+    - new_data_file_pattern: Glob pattern for new replacement files
+    - opts: Options (same as `create/4`)
+
+  ## Returns
+    `{:ok, snapshot_metadata}` - Snapshot metadata for metadata.json
+    `{:error, reason}` - Snapshot creation failed
+  """
+  @spec create_replace(term(), String.t(), list(map()), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def create_replace(conn, table_path, deleted_files_metadata, new_data_file_pattern, opts \\ []) do
+    partition_spec = Keyword.fetch!(opts, :partition_spec)
+    snapshot_id = Keyword.get(opts, :snapshot_id, generate_snapshot_id())
+    sequence_number = Keyword.get(opts, :sequence_number, 1)
+    table_schema = Keyword.get(opts, :table_schema)
+    schema_id = Keyword.get(opts, :schema_id, 0)
+    parent_manifests = Keyword.get(opts, :parent_manifests, [])
+
+    Logger.info(fn -> "Creating replace snapshot #{snapshot_id} for table: #{table_path}" end)
+
+    manifest_opts = [table_schema: table_schema, schema_id: schema_id]
+
+    with {:ok, new_stats} <- ParquetStats.extract(conn, new_data_file_pattern, opts),
+         # Create ADDED manifest for new files (status=1)
+         {:ok, added_manifest_avro} <-
+           Manifest.create(new_stats, snapshot_id, partition_spec, manifest_opts),
+         {:ok, added_manifest_metadata} <-
+           upload_manifest(added_manifest_avro, table_path, snapshot_id, opts,
+             added_data_files_count: length(new_stats),
+             added_rows_count: total_records(new_stats)
+           ),
+         # Create DELETED manifest for old files (status=2)
+         {:ok, deleted_manifest_avro} <-
+           Manifest.create(deleted_files_metadata, snapshot_id, partition_spec,
+             Keyword.put(manifest_opts, :status, 2)
+           ),
+         {:ok, deleted_manifest_metadata} <-
+           upload_manifest(deleted_manifest_avro, table_path, snapshot_id, opts,
+             added_data_files_count: 0,
+             deleted_data_files_count: length(deleted_files_metadata),
+             deleted_rows_count: total_records(deleted_files_metadata)
+           ),
+         all_manifests <-
+           parent_manifests ++ [added_manifest_metadata, deleted_manifest_metadata],
+         {:ok, manifest_list_avro} <-
+           ManifestList.create(all_manifests, snapshot_id, sequence_number),
+         {:ok, manifest_list_path} <-
+           upload_manifest_list(manifest_list_avro, table_path, snapshot_id, opts) do
+      snapshot =
+        build_replace_snapshot_metadata(
+          snapshot_id,
+          manifest_list_path,
+          new_stats,
+          deleted_files_metadata,
+          all_manifests
+        )
+
+      Logger.info(fn ->
+        "Created replace snapshot #{snapshot_id}: #{length(new_stats)} added, #{length(deleted_files_metadata)} deleted"
+      end)
+
+      {:ok, snapshot}
+    else
+      {:error, reason} = error ->
+        Logger.error(fn ->
+          "Failed to create replace snapshot #{snapshot_id}: #{inspect(reason)}"
+        end)
+
+        error
+    end
+  end
+
   ## Private Functions
 
-  defp upload_manifest(avro_binary, table_path, snapshot_id, opts) do
+  defp upload_manifest(avro_binary, table_path, snapshot_id, opts, counts \\ []) do
     storage = Iceberg.Config.storage_backend(opts)
     manifest_id = UUID.generate()
     relative_path = "#{table_path}/metadata/#{manifest_id}.avro"
@@ -103,10 +183,11 @@ defmodule Iceberg.Snapshot do
           manifest_length: manifest_length,
           partition_spec_id: 0,
           added_snapshot_id: snapshot_id,
-          added_data_files_count: 1,
+          added_data_files_count: Keyword.get(counts, :added_data_files_count, 1),
           existing_data_files_count: 0,
-          deleted_data_files_count: 0,
-          added_rows_count: 0
+          deleted_data_files_count: Keyword.get(counts, :deleted_data_files_count, 0),
+          added_rows_count: Keyword.get(counts, :added_rows_count, 0),
+          deleted_rows_count: Keyword.get(counts, :deleted_rows_count, 0)
         }
 
         Logger.debug(fn -> "Uploaded manifest: #{relative_path} (#{manifest_length} bytes)" end)
@@ -182,6 +263,39 @@ defmodule Iceberg.Snapshot do
       "schema-id" => 0,
       # Non-standard field: stores manifest metadata in JSON so that subsequent
       # append snapshots can include previous manifests without Avro decoding.
+      "manifest-entries" => all_manifests
+    }
+  end
+
+  defp build_replace_snapshot_metadata(
+         snapshot_id,
+         manifest_list_path,
+         new_stats,
+         deleted_stats,
+         all_manifests
+       ) do
+    added_files = length(new_stats)
+    added_rows = total_records(new_stats)
+    added_bytes = Enum.sum(Enum.map(new_stats, & &1[:file_size_in_bytes]))
+
+    deleted_files = length(deleted_stats)
+    deleted_rows = total_records(deleted_stats)
+    deleted_bytes = Enum.sum(Enum.map(deleted_stats, & &1[:file_size_in_bytes]))
+
+    %{
+      "snapshot-id" => snapshot_id,
+      "timestamp-ms" => System.system_time(:millisecond),
+      "manifest-list" => manifest_list_path,
+      "summary" => %{
+        "operation" => "replace",
+        "added-data-files" => to_string(added_files),
+        "added-records" => to_string(added_rows),
+        "added-files-size" => to_string(added_bytes),
+        "deleted-data-files" => to_string(deleted_files),
+        "deleted-records" => to_string(deleted_rows),
+        "deleted-files-size" => to_string(deleted_bytes)
+      },
+      "schema-id" => 0,
       "manifest-entries" => all_manifests
     }
   end

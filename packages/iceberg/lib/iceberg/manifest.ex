@@ -64,9 +64,10 @@ defmodule Iceberg.Manifest do
     table_schema = Keyword.get(opts, :table_schema)
     schema_id = Keyword.get(opts, :schema_id, 0)
     format_version = Keyword.get(opts, :format_version, 2)
+    status = Keyword.get(opts, :status, 1)
 
     manifest_entries =
-      Enum.map(data_files, &build_manifest_entry(&1, snapshot_id, partition_spec, table_schema))
+      Enum.map(data_files, &build_manifest_entry(&1, snapshot_id, partition_spec, table_schema, status))
 
     # Build Iceberg-specific Avro file metadata per the spec:
     # https://iceberg.apache.org/spec/#manifests
@@ -326,7 +327,8 @@ defmodule Iceberg.Manifest do
   defp get_partition_fields(_), do: []
 
   # Builds a single manifest entry
-  defp build_manifest_entry(data_file, snapshot_id, partition_spec, table_schema) do
+  # Status: 1 = ADDED, 2 = DELETED
+  defp build_manifest_entry(data_file, snapshot_id, partition_spec, table_schema, status) do
     partition_values = extract_partition_values(data_file, partition_spec)
 
     # Encode bounds as binary data according to Iceberg single-value serialization
@@ -334,8 +336,7 @@ defmodule Iceberg.Manifest do
     upper_bounds = encode_bounds(data_file[:upper_bounds], table_schema)
 
     %{
-      "status" => 1,
-      # 1 = ADDED
+      "status" => status,
       "snapshot_id" => snapshot_id,
       "sequence_number" => nil,
       "file_sequence_number" => nil,

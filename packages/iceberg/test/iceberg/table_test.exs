@@ -127,6 +127,125 @@ defmodule Iceberg.TableTest do
     end
   end
 
+  describe "replace_files/5" do
+    test "creates a replace snapshot end-to-end" do
+      schema = [{:id, "STRING", true}, {:name, "STRING", false}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      # Seed a file so register_files finds it
+      Memory.upload("test/table/data/file1.parquet", "fake-data", [])
+
+      # First, create an append snapshot so there's a current snapshot
+      MockCompute.set_response("parquet_metadata", {
+        :ok,
+        [
+          %{
+            "file_path" => "memory://test/test/table/data/file1.parquet",
+            "file_size_in_bytes" => 1024,
+            "record_count" => 100
+          }
+        ]
+      })
+
+      {:ok, _append_snapshot} =
+        Table.register_files(:conn, "test/table", "test/table/data/**/*.parquet", @opts)
+
+      # Now do a replace operation
+      MockCompute.set_response("parquet_metadata", {
+        :ok,
+        [
+          %{
+            "file_path" => "memory://test/test/table/data/compacted.parquet",
+            "file_size_in_bytes" => 2000,
+            "record_count" => 100
+          }
+        ]
+      })
+
+      deleted_files = [
+        %{
+          file_path: "memory://test/test/table/data/file1.parquet",
+          file_size_in_bytes: 1024,
+          record_count: 100,
+          partition_values: %{}
+        }
+      ]
+
+      {:ok, snapshot} =
+        Table.replace_files(
+          :conn,
+          "test/table",
+          deleted_files,
+          "test/table/data/compacted*.parquet",
+          @opts
+        )
+
+      assert snapshot["summary"]["operation"] == "replace"
+      assert snapshot["summary"]["added-data-files"] == "1"
+      assert snapshot["summary"]["deleted-data-files"] == "1"
+    end
+
+    test "carries forward parent manifests from current snapshot" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      # Seed a file in memory storage so register_files finds it
+      Memory.upload("test/table/data/keep.parquet", "fake-parquet-data", [])
+
+      # Create initial append snapshot
+      MockCompute.set_response("parquet_metadata", {
+        :ok,
+        [
+          %{
+            "file_path" => "memory://test/test/table/data/keep.parquet",
+            "file_size_in_bytes" => 512,
+            "record_count" => 50
+          }
+        ]
+      })
+
+      {:ok, append_snapshot} =
+        Table.register_files(:conn, "test/table", "test/table/data/**/*.parquet", @opts)
+
+      # Verify append created a snapshot with manifest entries
+      assert append_snapshot != nil
+      assert length(append_snapshot["manifest-entries"]) == 1
+
+      # Replace some files
+      MockCompute.set_response("parquet_metadata", {
+        :ok,
+        [
+          %{
+            "file_path" => "memory://test/test/table/data/new.parquet",
+            "file_size_in_bytes" => 1000,
+            "record_count" => 100
+          }
+        ]
+      })
+
+      deleted_files = [
+        %{
+          file_path: "memory://test/test/table/data/old.parquet",
+          file_size_in_bytes: 500,
+          record_count: 50,
+          partition_values: %{}
+        }
+      ]
+
+      {:ok, snapshot} =
+        Table.replace_files(
+          :conn,
+          "test/table",
+          deleted_files,
+          "test/table/data/new*.parquet",
+          @opts
+        )
+
+      # Should have parent manifest + added manifest + deleted manifest = 3
+      assert length(snapshot["manifest-entries"]) == 3
+    end
+  end
+
   describe "add_column/3" do
     test "adds a new column to table schema" do
       # Create table

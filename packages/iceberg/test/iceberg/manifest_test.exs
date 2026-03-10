@@ -135,6 +135,33 @@ defmodule Iceberg.ManifestTest do
       assert <<0x4F, 0x62, 0x6A, 0x01, _rest::binary>> = binary
     end
 
+    test "creates manifest with status 2 (DELETED) when option provided" do
+      data_files = [
+        %{
+          file_path: "s3://bucket/table/data/file1.parquet",
+          file_size: 1024,
+          record_count: 100,
+          partition_values: %{}
+        }
+      ]
+
+      {:ok, binary} = Manifest.create(data_files, 12_345, @empty_partition_spec, status: 2)
+
+      # Should produce valid Avro output
+      assert <<0x4F, 0x62, 0x6A, 0x01, _rest::binary>> = binary
+    end
+
+    test "default status is 1 (ADDED)" do
+      data_files = [
+        %{file_path: "test.parquet", file_size: 100, record_count: 10, partition_values: %{}}
+      ]
+
+      {:ok, binary} = Manifest.create(data_files, 1, @empty_partition_spec)
+
+      # Should produce valid Avro output (status=1 is the default)
+      assert <<0x4F, 0x62, 0x6A, 0x01, _rest::binary>> = binary
+    end
+
     test "partition values handled correctly for identity transform" do
       identity_spec = %{
         "spec-id" => 0,

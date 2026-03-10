@@ -503,6 +503,85 @@ defmodule Iceberg.Table do
   end
 
   @doc """
+  Replaces data files in an Iceberg table (compaction operation).
+
+  Swaps old data files for new ones without changing logical data.
+  Creates a new snapshot with operation "replace" that records both
+  the deleted (old) and added (new) files.
+
+  ## Parameters
+    - conn: Compute backend connection
+    - schema_module_or_path: Schema module or table path string
+    - deleted_files: List of metadata maps for files being replaced.
+      Each map must have `:file_path`, `:file_size_in_bytes`, `:record_count`,
+      and optionally `:partition_values`.
+    - new_file_pattern: Glob pattern matching new replacement files
+    - opts: Options including:
+      - `:source_file` - Source file identifier for lineage
+
+  ## Returns
+    `{:ok, snapshot}` on success
+    `{:error, reason}` on failure
+  """
+  @spec replace_files(term(), module() | String.t(), list(map()), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def replace_files(conn, schema_module_or_path, deleted_files, new_file_pattern, opts \\ [])
+
+  def replace_files(conn, schema_module, deleted_files, new_file_pattern, opts)
+      when is_atom(schema_module) do
+    table_path = schema_module.__table_path__()
+    replace_files_impl(conn, table_path, deleted_files, new_file_pattern, opts)
+  end
+
+  def replace_files(conn, table_path, deleted_files, new_file_pattern, opts)
+      when is_binary(table_path) do
+    replace_files_impl(conn, table_path, deleted_files, new_file_pattern, opts)
+  end
+
+  @spec replace_files_impl(term(), String.t(), list(map()), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defp replace_files_impl(conn, table_path, deleted_files, new_file_pattern, opts) do
+    Logger.info(fn -> "Starting replace operation for table: #{table_path}" end)
+
+    with {:ok, metadata} <- Metadata.load(table_path, opts) do
+      partition_spec =
+        List.first(metadata["partition-specs"]) || %{"spec-id" => 0, "fields" => []}
+
+      sequence_number = (metadata["last-sequence-number"] || 0) + 1
+      table_schema = List.first(metadata["schemas"])
+      schema_id = metadata["current-schema-id"] || 0
+      parent_manifests = get_current_snapshot_manifests(metadata)
+      data_url_pattern = Iceberg.Config.full_url(new_file_pattern, opts)
+
+      snapshot_opts =
+        Keyword.merge(opts,
+          partition_spec: partition_spec,
+          sequence_number: sequence_number,
+          table_schema: table_schema,
+          schema_id: schema_id,
+          parent_manifests: parent_manifests
+        )
+
+      with {:ok, snapshot} <-
+             Snapshot.create_replace(
+               conn,
+               table_path,
+               deleted_files,
+               data_url_pattern,
+               snapshot_opts
+             ),
+           {:ok, new_metadata} <- Metadata.add_snapshot(metadata, snapshot),
+           :ok <- Metadata.save(table_path, new_metadata, opts) do
+        Logger.info(fn ->
+          "Replace complete for #{table_path}: snapshot #{snapshot["snapshot-id"]}"
+        end)
+
+        {:ok, snapshot}
+      end
+    end
+  end
+
+  @doc """
   Registers externally-written Parquet files into an Iceberg table.
 
   Used when files are written outside this library.
