@@ -763,6 +763,24 @@ defmodule Iceberg.Table do
   end
 
   @doc """
+  Rewrites the manifest list for the current snapshot.
+
+  Delegates to `Iceberg.Maintenance.rewrite_manifests/2`.
+  """
+  @spec rewrite_manifests(module() | String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def rewrite_manifests(schema_module_or_path, opts \\ [])
+
+  def rewrite_manifests(schema_module, opts) when is_atom(schema_module) do
+    table_path = schema_module.__table_path__()
+    Maintenance.rewrite_manifests(table_path, opts)
+  end
+
+  def rewrite_manifests(table_path, opts) when is_binary(table_path) do
+    Maintenance.rewrite_manifests(table_path, opts)
+  end
+
+  @doc """
   Compacts small data files by merging them into larger files.
 
   Delegates to `Iceberg.Maintenance.compact_data_files/3`.

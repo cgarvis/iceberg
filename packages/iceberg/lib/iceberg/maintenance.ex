@@ -6,7 +6,7 @@ defmodule Iceberg.Maintenance do
   expired snapshots and their associated orphaned files.
   """
 
-  alias Iceberg.{Metadata, ParquetStats, Snapshot}
+  alias Iceberg.{ManifestList, Metadata, ParquetStats, Snapshot, UUID}
   require Logger
 
   # Default retention policy constants (matching Iceberg spec defaults)
@@ -84,6 +84,121 @@ defmodule Iceberg.Maintenance do
          }}
       else
         perform_expiration(table_path, metadata, snapshots, expired_ids, dry_run, opts)
+      end
+    end
+  end
+
+  @doc """
+  Rewrites the manifest list for the current snapshot.
+
+  Consolidates manifest list entries into a fresh manifest list file without
+  modifying the underlying Avro manifest files. This is useful after
+  expire_snapshots to create a clean manifest list.
+
+  ## Parameters
+    - table_path: Relative path to the table
+    - opts: Options
+      - `:dry_run` - Boolean (default: false)
+      - `:storage` - Storage backend module (required)
+      - `:base_url` - Base URL for storage paths (required)
+
+  ## Returns
+    `{:ok, %{rewritten_manifests: N, added_manifests: M}}`
+    `{:error, reason}`
+  """
+  @spec rewrite_manifests(String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def rewrite_manifests(table_path, opts \\ []) do
+    Logger.info(fn -> "Starting rewrite_manifests for table: #{table_path}" end)
+
+    with {:ok, metadata} <- Metadata.load(table_path, opts) do
+      current_id = metadata["current-snapshot-id"]
+
+      if is_nil(current_id) or current_id <= 0 do
+        Logger.debug(fn -> "No current snapshot for table: #{table_path}" end)
+        {:ok, %{rewritten_manifests: 0, added_manifests: 0}}
+      else
+        manifest_entries = get_current_snapshot_manifests(metadata)
+        original_count = length(manifest_entries)
+
+        if original_count <= 1 do
+          Logger.debug(fn ->
+            "Skipping rewrite_manifests: #{original_count} manifest entries (nothing to consolidate)"
+          end)
+
+          {:ok, %{rewritten_manifests: 0, added_manifests: 0}}
+        else
+          dry_run = Keyword.get(opts, :dry_run, false)
+
+          if dry_run do
+            {:ok, %{rewritten_manifests: original_count, added_manifests: 1}}
+          else
+            perform_manifest_rewrite(table_path, metadata, manifest_entries, original_count, opts)
+          end
+        end
+      end
+    end
+  end
+
+  @spec perform_manifest_rewrite(String.t(), map(), list(map()), integer(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defp perform_manifest_rewrite(table_path, metadata, manifest_entries, original_count, opts) do
+    storage = Iceberg.Config.storage_backend(opts)
+    now = System.system_time(:millisecond)
+    snapshot_id = now
+    sequence_number = (metadata["last-sequence-number"] || 0) + 1
+
+    Logger.debug(fn ->
+      "Rewriting manifest list with #{original_count} entries into snapshot #{snapshot_id}"
+    end)
+
+    with {:ok, avro_binary} <- ManifestList.create(manifest_entries, snapshot_id, sequence_number) do
+      manifest_list_id = UUID.generate()
+      relative_path = "#{table_path}/metadata/snap-#{snapshot_id}-#{manifest_list_id}.avro"
+      full_path = Iceberg.Config.full_url(relative_path, opts)
+
+      case storage.upload(
+             relative_path,
+             avro_binary,
+             Keyword.merge(opts, content_type: "application/octet-stream")
+           ) do
+        :ok ->
+          schema_id = metadata["current-schema-id"] || 0
+
+          new_snapshot = %{
+            "snapshot-id" => snapshot_id,
+            "timestamp-ms" => now,
+            "manifest-list" => full_path,
+            "summary" => %{
+              "operation" => "replace",
+              "rewritten-manifests" => to_string(original_count)
+            },
+            "schema-id" => schema_id,
+            "manifest-entries" => manifest_entries
+          }
+
+          with {:ok, new_metadata} <- Metadata.add_snapshot(metadata, new_snapshot),
+               :ok <- Metadata.save(table_path, new_metadata, opts) do
+            Logger.info(fn ->
+              "rewrite_manifests complete for #{table_path}: #{original_count} manifests consolidated"
+            end)
+
+            {:ok, %{rewritten_manifests: original_count, added_manifests: 1}}
+          else
+            {:error, reason} = error ->
+              Logger.error(fn ->
+                "Failed to save metadata for rewrite_manifests #{table_path}: #{inspect(reason)}"
+              end)
+
+              error
+          end
+
+        {:error, reason} ->
+          Logger.error(fn ->
+            "Failed to upload manifest list for rewrite_manifests #{table_path}: #{inspect(reason)}"
+          end)
+
+          {:error, reason}
       end
     end
   end

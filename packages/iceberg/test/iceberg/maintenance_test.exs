@@ -514,6 +514,111 @@ defmodule Iceberg.MaintenanceTest do
     end
   end
 
+  describe "rewrite_manifests/2" do
+    test "no snapshots returns zero counts" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      assert {:ok, result} = Table.rewrite_manifests("test/table", @opts)
+
+      assert result == %{rewritten_manifests: 0, added_manifests: 0}
+    end
+
+    test "single manifest entry returns zero counts" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      create_snapshot("test/table", "file1.parquet")
+
+      assert {:ok, result} = Table.rewrite_manifests("test/table", @opts)
+
+      assert result == %{rewritten_manifests: 0, added_manifests: 0}
+    end
+
+    test "rewrites manifest list with multiple entries" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      create_snapshot("test/table", "file1.parquet")
+      create_snapshot("test/table", "file2.parquet")
+      create_snapshot("test/table", "file3.parquet")
+
+      # Verify current snapshot has 3 manifest entries (via parent_manifests carry-forward)
+      {:ok, metadata_before} = Iceberg.Metadata.load("test/table", @opts)
+      current_id_before = metadata_before["current-snapshot-id"]
+
+      current_snap_before =
+        Enum.find(metadata_before["snapshots"], &(&1["snapshot-id"] == current_id_before))
+
+      assert length(current_snap_before["manifest-entries"]) == 3
+
+      assert {:ok, result} = Table.rewrite_manifests("test/table", @opts)
+
+      assert result == %{rewritten_manifests: 3, added_manifests: 1}
+
+      # Verify a new snapshot was created
+      {:ok, metadata_after} = Iceberg.Metadata.load("test/table", @opts)
+      assert length(metadata_after["snapshots"]) == 4
+
+      # Verify the new snapshot has 3 manifest entries
+      new_current_id = metadata_after["current-snapshot-id"]
+      new_current_snap = Enum.find(metadata_after["snapshots"], &(&1["snapshot-id"] == new_current_id))
+      assert length(new_current_snap["manifest-entries"]) == 3
+    end
+
+    test "dry_run returns counts without modifying" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      create_snapshot("test/table", "file1.parquet")
+      create_snapshot("test/table", "file2.parquet")
+      create_snapshot("test/table", "file3.parquet")
+
+      assert {:ok, result} =
+               Table.rewrite_manifests("test/table", Keyword.put(@opts, :dry_run, true))
+
+      assert result == %{rewritten_manifests: 3, added_manifests: 1}
+
+      # Metadata should be unchanged (still 3 snapshots)
+      {:ok, metadata} = Iceberg.Metadata.load("test/table", @opts)
+      assert length(metadata["snapshots"]) == 3
+    end
+
+    test "works after expire_snapshots" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      create_snapshot("test/table", "file1.parquet")
+      create_snapshot("test/table", "file2.parquet")
+      create_snapshot("test/table", "file3.parquet")
+
+      older_than = DateTime.utc_now() |> DateTime.add(1, :second)
+
+      assert {:ok, expire_result} =
+               Table.expire_snapshots(
+                 "test/table",
+                 Keyword.merge(@opts, older_than: older_than, retain_last: 1)
+               )
+
+      assert expire_result.deleted_snapshots == 2
+
+      # Now rewrite manifests on the post-expiration table
+      assert {:ok, rewrite_result} = Table.rewrite_manifests("test/table", @opts)
+
+      # The surviving snapshot should have carried-forward manifest entries
+      # If it has more than 1, rewrite should consolidate; if 1, returns zero counts.
+      # Either way, the call should succeed.
+      assert rewrite_result.added_manifests in [0, 1]
+
+      # Verify metadata is consistent
+      {:ok, metadata} = Iceberg.Metadata.load("test/table", @opts)
+      current_id = metadata["current-snapshot-id"]
+      assert current_id != nil
+      current_snap = Enum.find(metadata["snapshots"], &(&1["snapshot-id"] == current_id))
+      assert current_snap != nil
+    end
+  end
+
   describe "compact_data_files/3" do
     # Helper to seed small files without creating a snapshot so we can control
     # how many candidate files exist independently of snapshot creation.
