@@ -41,9 +41,9 @@ defmodule Iceberg.ParquetStats do
   end
 
   # Validates file pattern contains only safe characters to prevent SQL injection
-  # Allowed: alphanumeric, /, *, ., -, _, :
+  # Allowed: alphanumeric, /, *, ., -, _, :, {, }, , (comma for brace expansion globs)
   defp validate_file_pattern(pattern) when is_binary(pattern) do
-    if String.match?(pattern, ~r/^[a-zA-Z0-9\/\*\.\-_:]+$/) do
+    if String.match?(pattern, ~r/^[a-zA-Z0-9\/\*\.\-_:,\{\}]+$/) do
       :ok
     else
       Error.invalid_file_pattern("Pattern contains unsafe characters: #{pattern}")

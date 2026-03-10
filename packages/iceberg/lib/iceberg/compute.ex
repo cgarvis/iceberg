@@ -99,4 +99,24 @@ defmodule Iceberg.Compute do
               opts :: keyword()
             ) ::
               {:ok, result} | {:error, error}
+
+  @doc """
+  Compacts multiple data files into a single output file.
+
+  Used by table maintenance to merge small files into larger ones.
+
+  ## Parameters
+    - connection: Backend-specific connection
+    - input_files: List of file paths to compact
+    - output_path: Destination path for the compacted file
+    - opts: Options (e.g., partition_by)
+
+  ## Returns
+    - `{:ok, result}` on success
+    - `{:error, reason}` on failure
+  """
+  @callback compact(connection, input_files :: list(String.t()), output_path :: String.t(), opts :: keyword()) ::
+              {:ok, result} | {:error, error}
+
+  @optional_callbacks [compact: 4]
 end

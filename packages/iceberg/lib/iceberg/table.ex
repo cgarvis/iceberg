@@ -762,6 +762,24 @@ defmodule Iceberg.Table do
     Maintenance.remove_orphan_files(table_path, opts)
   end
 
+  @doc """
+  Compacts small data files by merging them into larger files.
+
+  Delegates to `Iceberg.Maintenance.compact_data_files/3`.
+  """
+  @spec compact_data_files(term(), module() | String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def compact_data_files(conn, schema_module_or_path, opts \\ [])
+
+  def compact_data_files(conn, schema_module, opts) when is_atom(schema_module) do
+    table_path = schema_module.__table_path__()
+    Maintenance.compact_data_files(conn, table_path, opts)
+  end
+
+  def compact_data_files(conn, table_path, opts) when is_binary(table_path) do
+    Maintenance.compact_data_files(conn, table_path, opts)
+  end
+
   ## Private Functions
 
   @spec write_data_files(term(), String.t(), String.t(), keyword()) :: :ok | {:error, term()}

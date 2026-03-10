@@ -56,6 +56,14 @@ defmodule Iceberg.Test.MockCompute do
   end
 
   @impl true
+  def compact(_conn, input_files, output_path, _opts) do
+    # Strip the scheme prefix to get the relative storage path for Memory storage
+    relative_path = String.replace_prefix(output_path, "memory://test/", "")
+    Iceberg.Storage.Memory.upload(relative_path, "fake-compacted-parquet-data", [])
+    {:ok, %{input_files: input_files, output_path: output_path}}
+  end
+
+  @impl true
   def write_data_files(conn, source_query, dest_path, opts) do
     # For mock purposes, just build a simple COPY statement and execute it
     # This allows tests to mock the COPY command if needed

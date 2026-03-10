@@ -6,7 +6,7 @@ defmodule Iceberg.Maintenance do
   expired snapshots and their associated orphaned files.
   """
 
-  alias Iceberg.Metadata
+  alias Iceberg.{Metadata, ParquetStats, Snapshot}
   require Logger
 
   # Default retention policy constants (matching Iceberg spec defaults)
@@ -84,6 +84,119 @@ defmodule Iceberg.Maintenance do
          }}
       else
         perform_expiration(table_path, metadata, snapshots, expired_ids, dry_run, opts)
+      end
+    end
+  end
+
+  @default_target_file_size_bytes 134_217_728
+
+  @doc """
+  Compacts small data files in an Iceberg table by merging them into larger files.
+
+  Uses a bin-packing algorithm to group small files together until they reach the
+  target file size. Each group is compacted into a single file, then a replace
+  snapshot is created to swap the old files for the new ones.
+
+  ## Parameters
+    - conn: Compute backend connection
+    - table_path: Relative path to the table
+    - opts: Options
+      - `:target_file_size_bytes` - Target size for output files (default: 134_217_728 = 128MB)
+      - `:min_file_size_bytes` - Files smaller than this are candidates for compaction (default: target * 0.75)
+      - `:min_input_files` - Minimum number of candidate files to trigger compaction (default: 5)
+      - `:dry_run` - If true, return plan without executing (default: false)
+      - `:storage`, `:compute`, `:base_url` - Required config opts
+
+  ## Returns
+    - `{:ok, %{rewritten_data_files: N, added_data_files: M, rewritten_bytes: B}}` on success
+    - `{:ok, %{rewritten_data_files: 0, ...}}` if no compaction needed
+    - `{:error, reason}` on failure
+  """
+  @spec compact_data_files(term(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  def compact_data_files(conn, table_path, opts \\ []) do
+    Logger.info(fn -> "Starting compact_data_files for table: #{table_path}" end)
+
+    compute = Iceberg.Config.compute_backend(opts)
+
+    unless function_exported?(compute, :compact, 4) do
+      raise ArgumentError,
+            "Compute backend #{inspect(compute)} does not implement the compact/4 callback"
+    end
+
+    target_file_size_bytes =
+      Keyword.get(opts, :target_file_size_bytes, @default_target_file_size_bytes)
+
+    min_file_size_bytes =
+      Keyword.get(opts, :min_file_size_bytes, round(target_file_size_bytes * 0.75))
+
+    min_input_files = Keyword.get(opts, :min_input_files, 5)
+    dry_run = Keyword.get(opts, :dry_run, false)
+
+    with {:ok, metadata} <- Metadata.load(table_path, opts) do
+      base_url = Iceberg.Config.base_url(opts)
+      data_url_pattern = Iceberg.Config.full_url("#{table_path}/data/**/*.parquet", opts)
+
+      case ParquetStats.extract(conn, data_url_pattern, opts) do
+        {:ok, all_stats} ->
+          stats_by_path =
+            Map.new(all_stats, fn s ->
+              relative = strip_base_url(s[:file_path], base_url)
+              {relative, s}
+            end)
+
+          candidates =
+            all_stats
+            |> Enum.filter(fn s -> s[:file_size_in_bytes] < min_file_size_bytes end)
+            |> Enum.sort_by(& &1[:file_size_in_bytes])
+            |> Enum.map(fn s -> strip_base_url(s[:file_path], base_url) end)
+
+          if length(candidates) < min_input_files do
+            Logger.debug(fn ->
+              "Skipping compaction: #{length(candidates)} candidate files < min_input_files #{min_input_files}"
+            end)
+
+            {:ok, %{rewritten_data_files: 0, added_data_files: 0, rewritten_bytes: 0}}
+          else
+            bins = bin_pack(candidates, stats_by_path, target_file_size_bytes)
+
+            Logger.info(fn ->
+              "Compaction plan: #{length(candidates)} files -> #{length(bins)} groups"
+            end)
+
+            if dry_run do
+              total_rewritten = Enum.sum(Enum.map(bins, &length/1))
+
+              {:ok,
+               %{
+                 rewritten_data_files: total_rewritten,
+                 added_data_files: length(bins),
+                 rewritten_bytes:
+                   Enum.sum(
+                     Enum.map(bins, fn group ->
+                       Enum.sum(
+                         Enum.map(group, fn path ->
+                           stats_by_path[path][:file_size_in_bytes] || 0
+                         end)
+                       )
+                     end)
+                   )
+               }}
+            else
+              execute_compaction(
+                conn,
+                table_path,
+                metadata,
+                bins,
+                stats_by_path,
+                compute,
+                opts
+              )
+            end
+          end
+
+        {:error, reason} ->
+          {:error, reason}
       end
     end
   end
@@ -380,6 +493,162 @@ defmodule Iceberg.Maintenance do
     protected
     |> MapSet.union(manifest_lists)
     |> MapSet.union(manifests)
+  end
+
+  @spec execute_compaction(term(), String.t(), map(), list(list(String.t())), map(), module(), keyword()) ::
+          {:ok, map()} | {:error, term()}
+  defp execute_compaction(conn, table_path, metadata, bins, stats_by_path, compute, opts) do
+    results =
+      Enum.map(bins, fn group ->
+        output_uuid = Iceberg.UUID.generate()
+        output_relative = "#{table_path}/data/#{output_uuid}.parquet"
+        output_path = Iceberg.Config.full_url(output_relative, opts)
+
+        input_full_paths =
+          Enum.map(group, &Iceberg.Config.full_url(&1, opts))
+
+        case compute.compact(conn, input_full_paths, output_path, opts) do
+          {:ok, _result} ->
+            {:ok, %{group: group, output_relative: output_relative}}
+
+          {:error, reason} ->
+            Logger.error(fn ->
+              "Compaction failed for group #{inspect(group)}: #{inspect(reason)}"
+            end)
+
+            {:error, reason}
+        end
+      end)
+
+    {compacted_groups, errors} = Enum.split_with(results, &match?({:ok, _}, &1))
+
+    if errors != [] do
+      {:error, {:compaction_failed, Enum.map(errors, &elem(&1, 1))}}
+    else
+      successful = Enum.map(compacted_groups, &elem(&1, 1))
+
+      deleted_files_metadata =
+        Enum.flat_map(successful, fn %{group: group} ->
+          Enum.map(group, fn path ->
+            stat = stats_by_path[path]
+
+            %{
+              file_path: Iceberg.Config.full_url(path, opts),
+              file_size_in_bytes: stat[:file_size_in_bytes] || 0,
+              record_count: stat[:record_count] || 0,
+              partition_values: stat[:partition_values] || %{}
+            }
+          end)
+        end)
+
+      new_file_paths = Enum.map(successful, & &1[:output_relative])
+      new_data_url_pattern = build_compaction_pattern(new_file_paths, table_path, opts)
+
+      partition_spec =
+        List.first(metadata["partition-specs"]) ||
+          %{"spec-id" => 0, "fields" => []}
+
+      sequence_number = (metadata["last-sequence-number"] || 0) + 1
+      table_schema = List.first(metadata["schemas"])
+      schema_id = metadata["current-schema-id"] || 0
+      parent_manifests = get_current_snapshot_manifests(metadata)
+
+      snapshot_opts =
+        Keyword.merge(opts,
+          partition_spec: partition_spec,
+          sequence_number: sequence_number,
+          table_schema: table_schema,
+          schema_id: schema_id,
+          parent_manifests: parent_manifests
+        )
+
+      with {:ok, snapshot} <-
+             Snapshot.create_replace(
+               conn,
+               table_path,
+               deleted_files_metadata,
+               new_data_url_pattern,
+               snapshot_opts
+             ),
+           {:ok, new_metadata} <- Metadata.add_snapshot(metadata, snapshot),
+           :ok <- Metadata.save(table_path, new_metadata, opts) do
+        total_rewritten = length(deleted_files_metadata)
+        total_added = length(successful)
+
+        rewritten_bytes =
+          Enum.sum(Enum.map(deleted_files_metadata, & &1[:file_size_in_bytes]))
+
+        Logger.info(fn ->
+          "compact_data_files complete for #{table_path}: #{total_rewritten} files -> #{total_added} files"
+        end)
+
+        {:ok,
+         %{
+           rewritten_data_files: total_rewritten,
+           added_data_files: total_added,
+           rewritten_bytes: rewritten_bytes
+         }}
+      end
+    end
+  end
+
+  # Builds a file pattern for ParquetStats.extract that matches only the compacted output files.
+  # Uses the exact single path when there's one file, or constructs a brace glob for multiple.
+  @spec build_compaction_pattern(list(String.t()), String.t(), keyword()) :: String.t()
+  defp build_compaction_pattern([single], _table_path, opts) do
+    Iceberg.Config.full_url(single, opts)
+  end
+
+  defp build_compaction_pattern(paths, _table_path, opts) do
+    filenames = Enum.map(paths, &Path.basename/1)
+    dir = paths |> List.first() |> Path.dirname()
+    pattern = "#{dir}/{#{Enum.join(filenames, ",")}}"
+    Iceberg.Config.full_url(pattern, opts)
+  end
+
+  # Groups candidate files into bins using a first-fit bin-packing algorithm.
+  # Each bin accumulates files until adding the next would exceed target_file_size_bytes.
+  # Bins with fewer than 2 files are discarded (single files need no compaction).
+  @spec bin_pack(list(String.t()), map(), integer()) :: list(list(String.t()))
+  defp bin_pack(candidates, stats_by_path, target_file_size_bytes) do
+    {rev_bins, current_bin, _current_size} =
+      Enum.reduce(candidates, {[], [], 0}, fn path, {bins, current_bin, current_size} ->
+        file_size = stats_by_path[path][:file_size_in_bytes] || 0
+
+        if current_bin != [] && current_size + file_size > target_file_size_bytes do
+          {[Enum.reverse(current_bin) | bins], [path], file_size}
+        else
+          {bins, [path | current_bin], current_size + file_size}
+        end
+      end)
+
+    final_bins =
+      if current_bin != [] do
+        [Enum.reverse(current_bin) | rev_bins]
+      else
+        rev_bins
+      end
+      |> Enum.reverse()
+
+    Enum.filter(final_bins, fn bin -> length(bin) >= 2 end)
+  end
+
+  # Extracts accumulated manifest entries from the current snapshot's JSON metadata.
+  @spec get_current_snapshot_manifests(map()) :: list(map())
+  defp get_current_snapshot_manifests(metadata) do
+    current_id = metadata["current-snapshot-id"]
+
+    if current_id && current_id > 0 do
+      metadata["snapshots"]
+      |> List.wrap()
+      |> Enum.find(&(&1["snapshot-id"] == current_id))
+      |> case do
+        nil -> []
+        snapshot -> snapshot["manifest-entries"] || []
+      end
+    else
+      []
+    end
   end
 
   @spec to_integer_safe(integer() | String.t() | term(), integer()) :: integer()

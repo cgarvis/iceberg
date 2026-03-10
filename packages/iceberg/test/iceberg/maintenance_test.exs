@@ -513,4 +513,164 @@ defmodule Iceberg.MaintenanceTest do
       end
     end
   end
+
+  describe "compact_data_files/3" do
+    # Helper to seed small files without creating a snapshot so we can control
+    # how many candidate files exist independently of snapshot creation.
+    defp seed_small_file(table_path, filename, size_bytes \\ 1024) do
+      relative_path = "#{table_path}/data/#{filename}"
+      full_path = "memory://test/#{relative_path}"
+      Memory.upload(relative_path, "fake-parquet-data-#{filename}", [])
+      {relative_path, full_path, size_bytes}
+    end
+
+    # Sets up MockCompute to respond to parquet_metadata queries with stats for
+    # the given list of {relative_path, full_path, size_bytes} tuples.
+    defp set_stats_response(file_tuples) do
+      rows =
+        Enum.map(file_tuples, fn {_rel, full, size} ->
+          %{
+            "file_path" => full,
+            "file_size_in_bytes" => size,
+            "record_count" => 10
+          }
+        end)
+
+      MockCompute.set_response("parquet_metadata", {:ok, rows})
+    end
+
+    test "returns zero counts when no files exist" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      MockCompute.set_response("parquet_metadata", {:ok, []})
+
+      assert {:ok, result} = Table.compact_data_files(:conn, "test/table", @opts)
+
+      assert result == %{rewritten_data_files: 0, added_data_files: 0, rewritten_bytes: 0}
+    end
+
+    test "returns zero counts when fewer than min_input_files candidates" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      files = [
+        seed_small_file("test/table", "small1.parquet", 512),
+        seed_small_file("test/table", "small2.parquet", 512)
+      ]
+
+      set_stats_response(files)
+
+      opts = Keyword.put(@opts, :min_input_files, 5)
+      assert {:ok, result} = Table.compact_data_files(:conn, "test/table", opts)
+
+      assert result == %{rewritten_data_files: 0, added_data_files: 0, rewritten_bytes: 0}
+    end
+
+    test "compacts small files into larger ones" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      files = [
+        seed_small_file("test/table", "small1.parquet", 512),
+        seed_small_file("test/table", "small2.parquet", 512),
+        seed_small_file("test/table", "small3.parquet", 512),
+        seed_small_file("test/table", "small4.parquet", 512),
+        seed_small_file("test/table", "small5.parquet", 512)
+      ]
+
+      # Set the parquet_metadata response. This is used twice by compact_data_files:
+      # once for candidate selection, and once by Snapshot.create_replace for the
+      # new file manifest. The same response is acceptable for both calls.
+      set_stats_response(files)
+
+      opts =
+        Keyword.merge(@opts,
+          min_input_files: 5,
+          target_file_size_bytes: 134_217_728,
+          min_file_size_bytes: 100_000
+        )
+
+      assert {:ok, result} = Table.compact_data_files(:conn, "test/table", opts)
+
+      assert result.rewritten_data_files == 5
+      assert result.added_data_files == 1
+      assert result.rewritten_bytes == 5 * 512
+
+      # Verify a replace snapshot was created
+      {:ok, metadata} = Iceberg.Metadata.load("test/table", @opts)
+      assert length(metadata["snapshots"]) >= 1
+      current_id = metadata["current-snapshot-id"]
+      current_snap = Enum.find(metadata["snapshots"], &(&1["snapshot-id"] == current_id))
+      assert current_snap["summary"]["operation"] == "replace"
+    end
+
+    test "dry_run returns plan without executing" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      files = [
+        seed_small_file("test/table", "small1.parquet", 512),
+        seed_small_file("test/table", "small2.parquet", 512),
+        seed_small_file("test/table", "small3.parquet", 512),
+        seed_small_file("test/table", "small4.parquet", 512),
+        seed_small_file("test/table", "small5.parquet", 512)
+      ]
+
+      set_stats_response(files)
+
+      opts =
+        Keyword.merge(@opts,
+          min_input_files: 5,
+          target_file_size_bytes: 134_217_728,
+          min_file_size_bytes: 100_000,
+          dry_run: true
+        )
+
+      assert {:ok, result} = Table.compact_data_files(:conn, "test/table", opts)
+
+      assert result.rewritten_data_files == 5
+      assert result.added_data_files == 1
+      assert result.rewritten_bytes == 5 * 512
+
+      # No snapshot should be created since it's a dry run
+      {:ok, metadata} = Iceberg.Metadata.load("test/table", @opts)
+      assert metadata["snapshots"] == nil or metadata["snapshots"] == []
+    end
+
+    test "skips files above min_file_size_bytes threshold" do
+      schema = [{:id, "STRING", true}]
+      :ok = Table.create("test/table", schema, @opts)
+
+      small_files = [
+        seed_small_file("test/table", "small1.parquet", 512),
+        seed_small_file("test/table", "small2.parquet", 512),
+        seed_small_file("test/table", "small3.parquet", 512),
+        seed_small_file("test/table", "small4.parquet", 512),
+        seed_small_file("test/table", "small5.parquet", 512)
+      ]
+
+      large_files = [
+        seed_small_file("test/table", "large1.parquet", 200_000_000),
+        seed_small_file("test/table", "large2.parquet", 200_000_000)
+      ]
+
+      # Set response for both the candidate selection query and the post-compact
+      # Snapshot.create_replace query. The same mock is acceptable for both.
+      set_stats_response(small_files ++ large_files)
+
+      opts =
+        Keyword.merge(@opts,
+          min_input_files: 5,
+          target_file_size_bytes: 134_217_728,
+          min_file_size_bytes: 100_000
+        )
+
+      assert {:ok, result} = Table.compact_data_files(:conn, "test/table", opts)
+
+      # Only the 5 small files should be compacted; 2 large files are skipped
+      assert result.rewritten_data_files == 5
+      assert result.added_data_files == 1
+    end
+  end
 end
